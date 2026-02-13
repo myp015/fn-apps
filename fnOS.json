@@ -64,6 +64,13 @@
   },
   {
     "arch": "aarch64",
+    "hash": "fa614a118ccd375dc9cd14bfbc15e792",
+    "name": "友善 Nanopi M4",
+    "url": "http://thunder.liveupdate.fnnas.com:8080/arm/trim/1.1.20/nanopi-m4/fnos_Mainland-PE_arm_1.1.20_nanopi-m4_687.img.gz",
+    "version": "1.1.20"
+  },
+  {
+    "arch": "aarch64",
     "hash": "5e3a13a61514ca4fd6996a040b48bb44",
     "name": "友善 Nanopi M5",
     "url": "http://thunder.liveupdate.fnnas.com:8080/arm/trim/1.1.19/nanopi-m5/fnos_Mainland-PE_arm_1.1.19_nanopi-m5_596.img.gz",
@@ -74,6 +81,13 @@
     "hash": "d1221a6e62ede23662c19ce4a8e86a4e",
     "name": "友善 Nanopi M5",
     "url": "http://thunder.liveupdate.fnnas.com:8080/arm/trim/1.1.20/nanopi-m5/fnos_Mainland-PE_arm_1.1.20_nanopi-m5_661.img.gz",
+    "version": "1.1.20"
+  },
+  {
+    "arch": "aarch64",
+    "hash": "2e4107f3ffd89cb60bc493045b42f36b",
+    "name": "友善 Nanopi M5",
+    "url": "http://thunder.liveupdate.fnnas.com:8080/arm/trim/1.1.20/nanopi-m5/fnos_Mainland-PE_arm_1.1.20_nanopi-m5_683.img.gz",
     "version": "1.1.20"
   },
   {
@@ -148,6 +162,13 @@
   },
   {
     "arch": "aarch64",
+    "hash": "211a3e6e7f24bd4d20ae856c69bcf20f",
+    "name": "友善 Nanopi R76S",
+    "url": "http://thunder.liveupdate.fnnas.com:8080/arm/trim/1.1.20/nanopi-r76s/fnos_Mainland-PE_arm_1.1.20_nanopi-r76s_675.img.gz",
+    "version": "1.1.20"
+  },
+  {
+    "arch": "aarch64",
     "hash": "d87b03305920d8f97e543ee8101515be",
     "name": "小马 Mrkaio M68S",
     "url": "http://thunder.liveupdate.fnnas.com:8080/arm/trim/1.1.19/mrkaio-m68s/fnos_Mainland-PE_arm_1.1.19_mrkaio-m68s_592.img.gz",
@@ -200,6 +221,13 @@
     "hash": "734439e0502be612ac7f36da14179d00",
     "name": "瑞莎 Radxa ROCK 4D",
     "url": "http://thunder.liveupdate.fnnas.com:8080/arm/trim/1.1.20/rock-4d/fnos_Mainland-PE_arm_1.1.20_rock-4d_663.img.gz",
+    "version": "1.1.20"
+  },
+  {
+    "arch": "aarch64",
+    "hash": "78b835d7747ac8d480081bf81b577c01",
+    "name": "瑞莎 Radxa ROCK 4D",
+    "url": "http://thunder.liveupdate.fnnas.com:8080/arm/trim/1.1.20/rock-4d/fnos_Mainland-PE_arm_1.1.20_rock-4d_684.img.gz",
     "version": "1.1.20"
   },
   {
