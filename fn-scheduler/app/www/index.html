@@ -136,7 +136,8 @@
         <label>
           <span data-i18n="field.pre_tasks">前置任务</span>
           <div class="pretask-wrapper">
-            <select name="pre_task_ids" id="preTaskSelect" multiple size="4"></select>
+            <div id="preTaskChecklist" class="pretask-checklist" aria-label="前置任务选择"></div>
+            <select name="pre_task_ids" id="preTaskSelect" multiple size="4" class="hidden-pretask-select"></select>
             <button type="button" id="btnClearPreTasks" class="ghost small" data-i18n="btn.clear_pre_tasks">全取消</button>
           </div>
           <small data-i18n="field.pre_tasks_hint">仅当所选任务最近一次成功后才执行</small>

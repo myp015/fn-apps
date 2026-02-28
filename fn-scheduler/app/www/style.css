@@ -660,6 +660,53 @@ small {
   /* 避免被统一 height 覆盖 */
 }
 
+.hidden-pretask-select {
+  display: none;
+}
+
+.pretask-checklist {
+  flex: 1;
+  min-height: 120px;
+  max-height: 120px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  padding: 6px;
+}
+
+.pretask-item {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  padding: 0px 8px;
+  border-radius: 6px;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.pretask-item:hover {
+  background: rgba(59, 130, 246, 0.08);
+}
+
+.pretask-item input[type="checkbox"] {
+  margin: 0;
+  flex: 0 0 auto;
+  margin-bottom: 0;
+}
+
+.pretask-item span {
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.pretask-empty {
+  color: var(--muted);
+  padding: 8px;
+  font-size: 12px;
+}
+
 .cron-input-wrapper input {
   flex: 1;
 }

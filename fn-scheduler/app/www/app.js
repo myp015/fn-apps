@@ -54,6 +54,7 @@ const elements = {
   accountStatus: document.getElementById("accountStatus"),
   accountReloadBtn: document.getElementById("btnReloadAccounts"),
   preTaskSelect: document.getElementById("preTaskSelect"),
+  preTaskChecklist: document.getElementById("preTaskChecklist"),
   clearPreTasksBtn: document.getElementById("btnClearPreTasks"),
   resultModal: document.getElementById("resultModal"),
   resultSubtitle: document.getElementById("resultSubtitle"),
@@ -879,6 +880,28 @@ function populatePreTaskOptions(currentId = null, selected = []) {
       }
       elements.preTaskSelect.appendChild(option);
     });
+  renderPreTaskChecklist();
+}
+
+function renderPreTaskChecklist() {
+  if (!elements.preTaskChecklist || !elements.preTaskSelect) {
+    return;
+  }
+
+  const options = Array.from(elements.preTaskSelect.options);
+  if (!options.length) {
+    elements.preTaskChecklist.innerHTML = `<div class="pretask-empty">${escapeHtml(_t('empty.no_tasks'))}</div>`;
+    return;
+  }
+
+  const html = options
+    .map((opt) => {
+      const id = String(opt.value);
+      const checked = opt.selected ? ' checked' : '';
+      return `<label class="pretask-item"><input type="checkbox" data-pretask-id="${escapeHtml(id)}"${checked}><span>${escapeHtml(opt.textContent || '')}</span></label>`;
+    })
+    .join('');
+  elements.preTaskChecklist.innerHTML = html;
 }
 
 function openTaskModal(task = null) {
@@ -1500,7 +1523,26 @@ function attachEventListeners() {
     Array.from(elements.preTaskSelect.options).forEach((option) => {
       option.selected = false;
     });
+    renderPreTaskChecklist();
   });
+  if (elements.preTaskChecklist) {
+    elements.preTaskChecklist.addEventListener("change", (event) => {
+      const target = event.target;
+      if (!(target instanceof HTMLInputElement) || target.type !== "checkbox") {
+        return;
+      }
+      const id = target.getAttribute("data-pretask-id");
+      if (!id) {
+        return;
+      }
+      const option = Array.from(elements.preTaskSelect.options).find(
+        (opt) => String(opt.value) === id,
+      );
+      if (option) {
+        option.selected = target.checked;
+      }
+    });
+  }
   if (elements.accountReloadBtn) {
     elements.accountReloadBtn.addEventListener("click", () =>
       loadAccounts({ showError: true }),
