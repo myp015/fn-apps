@@ -1,0 +1,58 @@
+[
+  {
+    "stepTitle": "安装向导",
+    "items": [
+      {
+        "type": "tips",
+        "helpText": "欢迎使用我们的应用！"
+      },
+      {
+        "type": "text",
+        "field": "wizard_single_port",
+        "label": "远程桌面 noVNC 端口号",
+        "initValue": "6080",
+        "rules": [
+          {
+            "required": true,
+            "message": "请输入远程桌面 noVNC 端口号"
+          },
+          {
+            "pattern": "^(6553[0-5]|655[0-2][0-9]|65[0-4][0-9]{2}|6[0-4][0-9]{3}|[1-5][0-9]{4}|[0-9]{1,4})$",
+            "message": "仅支持 1-65535 端口号"
+          }
+        ]
+      },
+      {
+        "type": "text",
+        "field": "wizard_mirror_port",
+        "label": "桌面镜像 noVNC 端口号",
+        "initValue": "6081",
+        "rules": [
+          {
+            "required": true,
+            "message": "请输入桌面镜像 noVNC 端口号"
+          },
+          {
+            "pattern": "^(6553[0-5]|655[0-2][0-9]|65[0-4][0-9]{2}|6[0-4][0-9]{3}|[1-5][0-9]{4}|[0-9]{1,4})$",
+            "message": "仅支持 1-65535 端口号"
+          }
+        ]
+      },
+      {
+        "type": "password",
+        "field": "wizard_novnc_password",
+        "label": "noVNC 密码",
+        "rules": [
+          {
+            "required": true,
+            "message": "请输入 noVNC 密码"
+          },
+          {
+            "min": 6,
+            "message": "密码长度不能少于6位"
+          }
+        ]
+      }
+    ]
+  }
+]

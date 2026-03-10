@@ -1,0 +1,30 @@
+{
+  ".url": {
+    "fn-linux-station.single": {
+      "title": "图形桌面",
+      "icon": "images/icon_{0}.png",
+      "type": "iframe",
+      "protocol": "",
+      "port": "${wizard_single_port}",
+      "url": "/vnc.html",
+      "allUsers": false,
+      "control": {
+        "accessPerm": "readonly",
+        "fullUrlPerm": "readonly"
+      }
+    },
+    "fn-linux-station.mirror": {
+      "title": "桌面镜像",
+      "icon": "images/icon_{0}.png",
+      "type": "iframe",
+      "protocol": "",
+      "port": "${wizard_mirror_port}",
+      "url": "/vnc.html",
+      "allUsers": false,
+      "control": {
+        "accessPerm": "readonly",
+        "fullUrlPerm": "readonly"
+      }
+    }
+  }
+}

@@ -1,0 +1,11 @@
+#!/bin/bash
+
+### This script is called after the user installs the application.
+
+TRIM_OVERLAYFS="${TRIM_PKGVAR}/trim_overlayfs" "${TRIM_APPDEST}/server/vmctl.sh" --install >$TRIM_TEMP_LOGFILE
+[ $? -ne 0 ] && {
+  TRIM_OVERLAYFS="${TRIM_PKGVAR}/trim_overlayfs" "${TRIM_APPDEST}/server/vmctl.sh" --uninstall
+  exit 1
+}
+
+exit 0

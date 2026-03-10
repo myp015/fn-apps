@@ -1,0 +1,14 @@
+{
+  "data-share": {
+    "shares": [
+      {
+        "name": "fn-linux-station",
+        "permission": {
+          "rw": [
+            "fn-linux-station"
+          ]
+        }
+      }
+    ]
+  }
+}
