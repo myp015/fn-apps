@@ -52,6 +52,42 @@
             "message": "密码长度不能少于6位"
           }
         ]
+      },
+      {
+        "type": "tips",
+        "helpText": "安装建议（选择越多安装时间越久，可进系统后自行安装）"
+      },
+      {
+        "type": "radio",
+        "field": "wizard_install_recommends",
+        "label": "是否安装推荐软件",
+        "initValue": "yes",
+        "options": [
+          {
+            "label": "正常安装",
+            "value": "yes"
+          },
+          {
+            "label": "最小安装",
+            "value": "no"
+          }
+        ]
+      },
+      {
+        "type": "radio",
+        "field": "wizard_install_chinese",
+        "label": "是否安装中文环境",
+        "initValue": "yes",
+        "options": [
+          {
+            "label": "是",
+            "value": "yes"
+          },
+          {
+            "label": "否",
+            "value": "no"
+          }
+        ]
       }
     ]
   }

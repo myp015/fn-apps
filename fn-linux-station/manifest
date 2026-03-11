@@ -1,5 +1,5 @@
 appname               = fn-linux-station
-version               = 1.0.0
+version               = 1.0.1
 display_name          = linux-station
 desc                  = Linux 工作站是一个基于 Linux 的桌面环境，旨在为用户提供一个高效、稳定和易用的工作环境。
 platform              = all

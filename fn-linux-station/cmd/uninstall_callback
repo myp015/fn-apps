@@ -2,7 +2,7 @@
 
 ### This script is called after the user uninstalls the application.
 
-# [ "${wizard_data_action:-}" == "delete" ] && TRIM_OVERLAYFS="${TRIM_PKGVAR}/trim_overlayfs" "${TRIM_APPDEST}/server/vmctl.sh" --uninstall
-[ "${wizard_data_action:-}" == "delete" ] && rm -rf "${TRIM_PKGVAR}"
+# 截至到 v1.1.23 安装/更新 时会 chown ${TRIM_PKGVAR} 路径下文件, 当存在 软连接时报错 10231, 因此目前全部删除
+rm -rf "${TRIM_PKGVAR}"
 
 exit 0

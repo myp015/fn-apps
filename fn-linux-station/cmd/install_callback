@@ -2,7 +2,7 @@
 
 ### This script is called after the user installs the application.
 
-TRIM_OVERLAYFS="${TRIM_PKGVAR}/trim_overlayfs" "${TRIM_APPDEST}/server/vmctl.sh" --install >$TRIM_TEMP_LOGFILE
+TRIM_OVERLAYFS="${TRIM_PKGVAR}/trim_overlayfs" "${TRIM_APPDEST}/server/vmctl.sh" --install --install-recommends ${wizard_install_recommends:-yes} --install-chinese ${wizard_install_chinese:-yes} >$TRIM_TEMP_LOGFILE
 [ $? -ne 0 ] && {
   TRIM_OVERLAYFS="${TRIM_PKGVAR}/trim_overlayfs" "${TRIM_APPDEST}/server/vmctl.sh" --uninstall
   exit 1
