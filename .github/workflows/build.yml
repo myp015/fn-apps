@@ -70,10 +70,24 @@ jobs:
             SIZE=$(stat -c%s "${APPNAME}_${PLATFORM}_v${VERSION}.fpk" 2>/dev/null | awk '{printf "%10.3f",$1/1024/1024}')
             NAME=$(grep -w '^display_name' "${APP}/manifest" | awk -F= '{print $2}' | xargs)
             TYPE=$(grep -w '^install_type' "${APP}/manifest" | awk -F= '{print $2}' | xargs)
-            maintainer=$(grep -w '^maintainer' "${APP}/manifest" | awk -F= '{print $2}' | xargs)
-            maintainer_url=$(grep -w '^maintainer_url' "${APP}/manifest" | awk -F= '{print $2}' | xargs)
-            APPS+=("\"${APP}\": {\"display_name\": \"${NAME}\", \"desc\": \"${DESC}\", \"labels\": \"工具\", \"version\": \"${VERSION}\", \"download_url\": \"https://github.com/${REPO}/releases/download/${TAG}/${APPNAME}_${PLATFORM}_v${VERSION}.fpk\", \"author\": \"${maintainer}\", \"author_url\": \"${maintainer_url}\", \"bug_report_url\": \"https://github.com/${REPO}/issues\", \"install_type\": \"${TYPE}\", \"size\": \"${SIZE}\", \"history\": {\"v${VERSION}\": \"Initial release of ${APPNAME} package.\"}}")
-
+            distributor=$(grep -w '^distributor' "${APP}/manifest" | awk -F= '{print $2}' | xargs)
+            distributor_url=$(grep -w '^distributor_url' "${APP}/manifest" | awk -F= '{print $2}' | xargs)
+            APPS+=("
+          \"${APP}\": {
+            \"display_name\": \"${NAME}\",
+            \"platform\": \"${PLATFORM}\",
+            \"version\": \"${VERSION}\",
+            \"desc\": \"${DESC}\",
+            \"distributor\": \"${distributor}\",
+            \"distributor_url\": \"${distributor_url}\",
+            \"bug_report_url\": \"https://github.com/${REPO}/issues\",
+            \"labels\": \"工具\",
+            \"size\": \"${SIZE}\",
+            \"download_url\": \"https://github.com/${REPO}/releases/download/${TAG}/${APPNAME}_${PLATFORM}_v${VERSION}.fpk\",
+            \"install_type\": \"$([ "${TYPE}" = "root" ] && echo "系统空间" || echo "存储空间")\",
+            \"changelog\": \"Initial release of ${APPNAME} package.\"
+          }
+          ")
           done
 
           echo "" >> apps-list.md
