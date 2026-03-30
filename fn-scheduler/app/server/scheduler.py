@@ -49,6 +49,13 @@ EVENT_TYPE_SCRIPT = "script"
 EVENT_TYPE_BOOT = "system_boot"
 EVENT_TYPE_SHUTDOWN = "system_shutdown"
 EVENT_TYPES = {EVENT_TYPE_SCRIPT, EVENT_TYPE_BOOT, EVENT_TYPE_SHUTDOWN}
+QUIET_ACCESS_LOG_PATHS = {"/api/tasks", "/api/health", "/api/tasks/version"}
+LOG_POLLING_REQUESTS = os.environ.get("SCHEDULER_LOG_POLLING_REQUESTS", "").lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
 
 
 def _detect_default_account() -> str:
@@ -1338,6 +1345,11 @@ class SchedulerContext:
 
 
 class SchedulerHTTPServer(ThreadingHTTPServer):
+    daemon_threads = True
+    allow_reuse_address = True
+    request_queue_size = 64
+    block_on_close = False
+
     def __init__(
         self,
         server_address,
@@ -2041,6 +2053,28 @@ class SchedulerRequestHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def log_message(self, format_: str, *args: Any) -> None:  # noqa: D401
+        if not LOG_POLLING_REQUESTS:
+            request_line = str(args[0]) if args else ""
+            try:
+                status_code = int(args[1]) if len(args) > 1 else 0
+            except (TypeError, ValueError):
+                status_code = 0
+            request_path = urlsplit(self.path).path if getattr(self, "path", "") else ""
+            request_method = getattr(self, "command", "")
+            if (
+                (
+                    request_path in QUIET_ACCESS_LOG_PATHS
+                    or request_line.startswith("GET /api/tasks ")
+                    or request_line.startswith("HEAD /api/tasks ")
+                    or request_line.startswith("GET /api/health ")
+                    or request_line.startswith("HEAD /api/health ")
+                    or request_line.startswith("GET /api/tasks/version ")
+                    or request_line.startswith("HEAD /api/tasks/version ")
+                )
+                and request_method in {"GET", "HEAD", ""}
+                and 200 <= status_code < 400
+            ):
+                return
         ca = getattr(self, "client_address", None)
         if isinstance(ca, (list, tuple)) and ca:
             addr = ca[0]

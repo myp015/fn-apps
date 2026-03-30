@@ -36,6 +36,7 @@ function mapApiErrorMessage(raw) {
 
 const AUTO_REFRESH_INTERVAL = 5000; // 5 seconds
 let autoRefreshTimer = null;
+let loadTasksPromise = null;
 
 const elements = {
   tableBody: document.querySelector("#taskTable tbody"),
@@ -1252,23 +1253,31 @@ async function handleFormSubmit(event) {
 }
 
 async function loadTasks({ silent = false } = {}) {
-  try {
-    const { data } = await api.listTasks();
-    state.tasks = data || [];
-    state.tasks.sort((a, b) => a.id - b.id);
-    state.selectedIds.forEach((id) => {
-      if (!state.tasks.some((task) => task.id === id)) {
-        state.selectedIds.delete(id);
-      }
-    });
-    renderTasks();
-  } catch (error) {
-    if (!silent) {
-      showToast(_t('error.load_tasks', { err: error.message }), true);
-    } else {
-      console.error("自动刷新任务失败", error);
-    }
+  if (loadTasksPromise) {
+    return loadTasksPromise;
   }
+  loadTasksPromise = (async () => {
+    try {
+      const { data } = await api.listTasks();
+      state.tasks = data || [];
+      state.tasks.sort((a, b) => a.id - b.id);
+      state.selectedIds.forEach((id) => {
+        if (!state.tasks.some((task) => task.id === id)) {
+          state.selectedIds.delete(id);
+        }
+      });
+      renderTasks();
+    } catch (error) {
+      if (!silent) {
+        showToast(_t('error.load_tasks', { err: error.message }), true);
+      } else {
+        console.error("自动刷新任务失败", error);
+      }
+    } finally {
+      loadTasksPromise = null;
+    }
+  })();
+  return loadTasksPromise;
 }
 
 function startAutoRefresh() {
