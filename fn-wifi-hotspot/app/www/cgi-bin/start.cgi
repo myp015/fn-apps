@@ -15,6 +15,10 @@ if [ -n "${COUNTRY:-}" ]; then
   apply_regdom "$COUNTRY" || true
 fi
 
+# Re-check channel availability after applying regdom so we fail early with
+# a clear message instead of bubbling up a vague nmcli error later.
+validate_runtime_channel || http_err "400 Bad Request" "${CFG_ERR:-invalid channel}"
+
 # Best-effort cleanup of old allow-port rules (in case previous stop didn't run)
 remove_allow_ports
 

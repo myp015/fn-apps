@@ -29,6 +29,10 @@ trim_ws() {
   printf '%s' "$1" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//'
 }
 
+shell_quote() {
+  printf "'%s'" "$(printf '%s' "${1:-}" | sed "s/'/'\\\\''/g")"
+}
+
 normalize_country() {
   c="$(trim_ws "${1:-}")"
   c="$(printf '%s' "$c" | tr 'a-z' 'A-Z')"
@@ -265,10 +269,10 @@ ensure_ip_forward() {
 write_nat_state() {
   umask 077
   cat >"$NAT_STATE_FILE" <<EOF
-HOTSPOT_IFACE=$(printf '%s' "$1")
-NAT_UPLINK_IFACE=$(printf '%s' "$2")
-HOTSPOT_PARENT_IFACE=$(printf '%s' "${3:-}")
-HOTSPOT_VIRTUAL_IFACE=$(printf '%s' "${4:-}")
+HOTSPOT_IFACE=$(shell_quote "$1")
+NAT_UPLINK_IFACE=$(shell_quote "$2")
+HOTSPOT_PARENT_IFACE=$(shell_quote "${3:-}")
+HOTSPOT_VIRTUAL_IFACE=$(shell_quote "${4:-}")
 EOF
 }
 
@@ -287,7 +291,7 @@ write_hotspot_state() {
     *) en=0 ;;
   esac
   cat >"$HOTSPOT_STATE_FILE" <<EOF
-ENABLED=$en
+ENABLED=$(shell_quote "$en")
 EOF
 }
 
@@ -438,16 +442,16 @@ delete_virtual_ap_iface() {
   [ -n "${iface:-}" ] || return 0
   command -v iw >/dev/null 2>&1 || return 0
 
-  if iw dev "$ap_iface" info >/dev/null 2>&1; then
+  if ! iw dev "$iface" info >/dev/null 2>&1; then
     return 0
   fi
 
   # Best-effort: let NetworkManager manage the new device.
   if command -v nmcli >/dev/null 2>&1; then
-    nmcli dev set "$ap_iface" managed no >/dev/null 2>&1 || true
+    nmcli dev set "$iface" managed no >/dev/null 2>&1 || true
   fi
   if command -v ip >/dev/null 2>&1; then
-	ip link set "$iface" down >/dev/null 2>&1 || true
+    ip link set "$iface" down >/dev/null 2>&1 || true
   fi
   iw dev "$iface" del >/dev/null 2>&1 || true
 }
@@ -1009,16 +1013,16 @@ load_cfg() {
 save_cfg() {
   umask 077
   cat >"$CFG_FILE" <<EOF
-IFACE=$(printf '%s' "$IFACE")
-UPLINK_IFACE=$(printf '%s' "$UPLINK_IFACE")
-IP_CIDR=$(printf '%s' "$IP_CIDR")
-ALLOW_PORTS=$(printf '%s' "$ALLOW_PORTS")
-SSID=$(printf '%s' "$SSID")
-PASSWORD=$(printf '%s' "$PASSWORD")
-COUNTRY=$(printf '%s' "$(normalize_country "${COUNTRY:-}")")
-BAND=$(printf '%s' "$BAND")
-CHANNEL=$(printf '%s' "$CHANNEL")
-CHANNEL_WIDTH=$(printf '%s' "$CHANNEL_WIDTH")
+IFACE=$(shell_quote "$IFACE")
+UPLINK_IFACE=$(shell_quote "$UPLINK_IFACE")
+IP_CIDR=$(shell_quote "$IP_CIDR")
+ALLOW_PORTS=$(shell_quote "$ALLOW_PORTS")
+SSID=$(shell_quote "$SSID")
+PASSWORD=$(shell_quote "$PASSWORD")
+COUNTRY=$(shell_quote "$(normalize_country "${COUNTRY:-}")")
+BAND=$(shell_quote "$BAND")
+CHANNEL=$(shell_quote "$CHANNEL")
+CHANNEL_WIDTH=$(shell_quote "$CHANNEL_WIDTH")
 EOF
   return $?
 }
@@ -1034,12 +1038,12 @@ validate_runtime_channel() {
   case "$ch_line" in
     *"disabled"*)
       cc="$(iw_reg_country)"
-      CFG_ERR="channel: $1 is disabled (regdom=$cc)"
+      CFG_ERR="channel: ${CHANNEL:-} is disabled (regdom=$cc)"
       return 1
       ;;
     *"no IR"*)
       cc="$(iw_reg_country)"
-      CFG_ERR="channel: $1 is marked 'no IR' (regdom=$cc), hotspot may not be allowed. Try band bg (2.4G) or set regulatory domain (e.g. iw reg set <CC>)."
+      CFG_ERR="channel: ${CHANNEL:-} is marked 'no IR' (regdom=$cc), hotspot may not be allowed. Try band bg (2.4G) or set regulatory domain (e.g. iw reg set <CC>)."
       return 1
       ;;
   esac

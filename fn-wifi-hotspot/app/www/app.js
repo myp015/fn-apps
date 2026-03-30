@@ -18,6 +18,7 @@ const langSelectEl = $("langSelect");
 const themeSelectEl = $("themeSelect");
 
 let serverChannelMeta = { bg: {}, a: {} };
+const REQUEST_TIMEOUT_MS = 10000;
 
 let lastRunning = false;
 let lastInternetStatus = undefined;
@@ -38,6 +39,7 @@ const I18N = {
     "toggle.suffix.nonnet": "（无网）",
 
     "err.invalidJson": "响应不是有效 JSON",
+    "err.requestTimeout": "请求超时，请稍后重试",
 
     "section.net": "网卡",
     "section.config": "配置",
@@ -161,6 +163,7 @@ const I18N = {
     "toggle.suffix.nonnet": " (offline)",
 
     "err.invalidJson": "Response is not valid JSON",
+    "err.requestTimeout": "Request timed out. Please try again.",
 
     "section.net": "Network",
     "section.config": "Config",
@@ -583,28 +586,34 @@ function updateBandAvailability() {
   }
 }
 
+function applyChannelOptions(channelOptions) {
+  if (!channelOptions || typeof channelOptions !== "object") return false;
+
+  serverChannelMeta = { bg: {}, a: {} };
+  for (const band of ["bg", "a"]) {
+    const arr = Array.isArray(channelOptions[band]) ? channelOptions[band] : null;
+    if (!Array.isArray(arr)) continue;
+    for (const entry of arr) {
+      const parts = String(entry).split(":");
+      const ch = parts[0] || "";
+      const freq = parts[1] || null;
+      const state = parts[2] || (parts.length > 1 ? "supported" : null);
+      if (ch) serverChannelMeta[band][String(ch)] = { freq, state };
+    }
+  }
+
+  updateBandAvailability();
+  return true;
+}
+
 // Fetch channel options from server for a specific country and apply them.
 async function fetchAndApplyChannelOptions(countryCode, { forceDefaultIfInvalid = false } = {}) {
   try {
     // Request server config with optional country override so backend can return proper channelOptions
     const url = cgiUrl("config_get.cgi") + (countryCode ? `&countryCode=${encodeURIComponent(countryCode)}` : "");
     const cfg = await getJSON(url);
-    if (cfg && cfg.channelOptions && typeof cfg.channelOptions === "object") {
-      serverChannelMeta = { bg: {}, a: {} };
-      for (const band of ["bg", "a"]) {
-        const arr = Array.isArray(cfg.channelOptions[band]) ? cfg.channelOptions[band] : null;
-        if (!Array.isArray(arr)) continue;
-        for (const entry of arr) {
-          const parts = String(entry).split(":");
-          const ch = parts[0] || "";
-          const freq = parts[1] || null;
-          const state = parts[2] || (parts.length > 1 ? 'supported' : null);
-          if (ch) serverChannelMeta[band][String(ch)] = { freq, state };
-        }
-      }
-      updateBandAvailability();
+    if (applyChannelOptions(cfg && cfg.channelOptions)) {
       syncChannelSelect({ forceDefaultIfInvalid });
-      markDirty();
     }
   } catch (e) {
     // Clear the countryCode UI when applying the requested country code failed
@@ -837,9 +846,31 @@ const cgiUrl = (p) => {
   return u.toString();
 };
 
+async function fetchText(url, options = {}) {
+  const { timeoutMs = REQUEST_TIMEOUT_MS, ...fetchOptions } = options;
+  const controller = (typeof AbortController === "function") ? new AbortController() : null;
+  const timer = controller && timeoutMs > 0
+    ? window.setTimeout(() => controller.abort(), timeoutMs)
+    : null;
+
+  try {
+    const response = await fetch(url, {
+      cache: "no-store",
+      ...fetchOptions,
+      signal: controller ? controller.signal : fetchOptions.signal,
+    });
+    const text = await response.text();
+    return { response, text };
+  } catch (e) {
+    if (e && e.name === "AbortError") throw new Error(t("err.requestTimeout"));
+    throw e;
+  } finally {
+    if (timer != null) window.clearTimeout(timer);
+  }
+}
+
 async function getJSON(url) {
-  const r = await fetch(url, { cache: "no-store" });
-  const text = await r.text();
+  const { response: r, text } = await fetchText(url);
   let j = null;
   try {
     j = text ? JSON.parse(text) : {};
@@ -865,13 +896,26 @@ async function getJSON(url) {
 
 async function postForm(url, dataObj) {
   const body = new URLSearchParams(dataObj).toString();
-  const r = await fetch(url, {
+  const { response: r, text } = await fetchText(url, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body
   });
-  const j = await r.json().catch(() => ({}));
-  if (!r.ok || j.ok === false) throw new Error(j.error || r.statusText);
+  let j = null;
+  try {
+    j = text ? JSON.parse(text) : {};
+  } catch (e) {
+    j = null;
+  }
+  if (!r.ok) {
+    const msg = (j && j.error) || text || r.statusText;
+    throw new Error(msg);
+  }
+  if (!j) {
+    const msg = text || t("err.invalidJson");
+    throw new Error(msg);
+  }
+  if (j.ok === false) throw new Error(j.error || r.statusText);
   return j;
 }
 
@@ -976,23 +1020,7 @@ async function refresh({ force = false, withConfig = true } = {}) {
     ]);
 
     const cfgObj = cfg && cfg.config;
-    if (cfg && cfg.channelOptions && typeof cfg.channelOptions === "object") {
-      // Build meta mapping for quick lookup from server-provided entries which may be
-      // either "CH:FRQ:STATE" or plain "CH".
-      serverChannelMeta = { bg: {}, a: {} };
-      for (const band of ["bg", "a"]) {
-        const arr = Array.isArray(cfg.channelOptions[band]) ? cfg.channelOptions[band] : null;
-        if (!Array.isArray(arr)) continue;
-        for (const entry of arr) {
-          const parts = String(entry).split(":");
-          const ch = parts[0] || "";
-          const freq = parts[1] || null;
-          const state = parts[2] || (parts.length > 1 ? 'supported' : null);
-          if (ch) serverChannelMeta[band][String(ch)] = { freq, state };
-        }
-      }
-      updateBandAvailability();
-    }
+    applyChannelOptions(cfg && cfg.channelOptions);
     const current = (!force && formDirty) ? baseline : null;
     setIfaceOptions(ifs && ifs.ifaces, current ? current.iface : (cfgObj && cfgObj.iface));
     setUplinkOptions(ups && ups.uplinks, current ? current.uplinkIface : (cfgObj && cfgObj.uplinkIface));
