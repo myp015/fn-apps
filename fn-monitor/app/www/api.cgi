@@ -1,9 +1,16 @@
 #!/usr/bin/env python3
-import os, sys, json, subprocess, glob, re
+import glob
+import json
+import os
+import re
+import subprocess
+import sys
+from urllib.parse import parse_qs
 
 LOGIND_PATH = "/etc/systemd/logind.conf"
 BASE_DIR = os.path.dirname(__file__)
 DRM_CLASS_PATH = "/sys/class/drm"
+FB_CLASS_GLOB = "/sys/class/graphics/fb*/blank"
 
 
 def respond(obj, status=200):
@@ -127,13 +134,13 @@ def write_logind(body):
 
 
 def get_query_param(name):
-    qs = os.environ.get("QUERY_STRING", "")
-    for part in qs.split("&"):
-        if "=" in part:
-            k, v = part.split("=", 1)
-            if k == name:
-                return v
-    return None
+    values = parse_qs(
+        os.environ.get("QUERY_STRING", ""),
+        keep_blank_values=True,
+    ).get(name)
+    if not values:
+        return None
+    return values[0]
 
 
 def read_post_json():
@@ -155,6 +162,59 @@ def run_cmd(cmd, timeout=8):
         return p.returncode, p.stdout, p.stderr
     except Exception as e:
         return -1, "", str(e)
+
+
+def list_framebuffer_blank_paths(writable_only=False):
+    paths = []
+    for path in sorted(glob.glob(FB_CLASS_GLOB)):
+        if not os.path.exists(path):
+            continue
+        if writable_only and not os.access(path, os.W_OK):
+            continue
+        paths.append(path)
+    return paths
+
+
+def read_framebuffer_blank_state():
+    values = []
+    for path in list_framebuffer_blank_paths(writable_only=False):
+        raw = read_text_file(path)
+        if raw is None:
+            continue
+        raw = raw.strip()
+        if not raw:
+            continue
+        try:
+            values.append(int(raw))
+        except ValueError:
+            continue
+    if not values:
+        return None
+    return max(values)
+
+
+def set_framebuffer_blank(turn_on):
+    blank_paths = list_framebuffer_blank_paths(writable_only=True)
+    if not blank_paths:
+        return False, "fb_blank", "no writable framebuffer blank control"
+
+    target_value = "0" if turn_on else "4"
+    errors = []
+    written = []
+    for path in blank_paths:
+        ok, msg = write_text_file(path, target_value)
+        if ok:
+            written.append(path)
+        else:
+            errors.append(f"{path}: {msg}")
+
+    if not written:
+        return False, "fb_blank", "; ".join(errors) or "framebuffer blank failed"
+
+    detail = f"wrote {target_value} to " + ", ".join(written)
+    if errors:
+        detail += " (partial errors: " + "; ".join(errors) + ")"
+    return True, "fb_blank", detail
 
 
 def list_drm_connectors():
@@ -190,6 +250,17 @@ def detect_card_module(card_name):
     except Exception:
         pass
     return None
+
+
+def detect_card_modules(connectors):
+    modules = {}
+    for item in connectors:
+        card_name = item.get("card")
+        if not card_name:
+            continue
+        if card_name not in modules:
+            modules[card_name] = detect_card_module(card_name)
+    return modules
 
 
 def parse_modetest_connectors(module_name=None):
@@ -242,6 +313,20 @@ def parse_modetest_connectors(module_name=None):
     return by_id
 
 
+def find_modetest_connector(parsed, connector_id=None, connector_name=None):
+    if not isinstance(parsed, dict) or "_error" in parsed:
+        return None
+    if connector_id is not None:
+        match = parsed.get(connector_id)
+        if match:
+            return match
+    if connector_name:
+        for value in parsed.values():
+            if isinstance(value, dict) and value.get("name") == connector_name:
+                return value
+    return None
+
+
 def read_text_file(path):
     try:
         with open(path, "r", encoding="utf-8") as f:
@@ -261,7 +346,16 @@ def write_text_file(path, value):
 
 def build_drm_status():
     connectors = list_drm_connectors()
-    parsed = parse_modetest_connectors(None)
+    auto_parsed = parse_modetest_connectors(None)
+    card_modules = detect_card_modules(connectors)
+    parsed_by_module = {}
+    for module_name in sorted(
+        {m for m in card_modules.values() if isinstance(m, str) and m}
+    ):
+        parsed_by_module[module_name] = parse_modetest_connectors(module_name)
+
+    fb_blank_paths = list_framebuffer_blank_paths(writable_only=True)
+    fb_blank_state = read_framebuffer_blank_state()
 
     result = []
     for c in connectors:
@@ -284,19 +378,33 @@ def build_drm_status():
             "enabled": enabled,
             "enabled_writable": os.path.exists(enabled_path)
             and os.access(enabled_path, os.W_OK),
-            "module": None,
+            "module": card_modules.get(c["card"]),
             "connector_id": connector_id,
             "dpms": None,
+            "fb_blank": fb_blank_state,
         }
 
-        if isinstance(parsed, dict) and "_error" in parsed:
-            item["modetest_error"] = parsed["_error"]
-        elif isinstance(parsed, dict):
-            mt = parsed.get(connector_id) if connector_id is not None else None
+        modetest_errors = []
+        parsed_candidates = []
+        if item["module"] and item["module"] in parsed_by_module:
+            parsed_candidates.append(parsed_by_module[item["module"]])
+        parsed_candidates.append(auto_parsed)
+
+        for parsed in parsed_candidates:
+            if not isinstance(parsed, dict):
+                continue
+            if "_error" in parsed:
+                modetest_errors.append(parsed["_error"])
+                continue
+            mt = find_modetest_connector(parsed, connector_id, c["name"])
             if mt:
                 dpms_v = mt.get("dpms_value")
                 if dpms_v is not None:
                     item["dpms"] = dpms_v
+                    break
+
+        if modetest_errors:
+            item["modetest_error"] = " ; ".join(dict.fromkeys(modetest_errors))
 
         item["dpms_supported"] = item["dpms"] is not None
 
@@ -311,23 +419,40 @@ def build_drm_status():
         else:
             item["state"] = "disconnected"
 
+        result.append(item)
+
+    connected_count = sum(1 for item in result if item.get("status") == "connected")
+    fb_blank_supported = bool(fb_blank_paths) and connected_count <= 1
+
+    for item in result:
+        control_methods = []
+        if item["dpms_supported"]:
+            control_methods.append("dpms")
+        if item["enabled_writable"]:
+            control_methods.append("sysfs_enabled")
+        if item.get("status") == "connected" and fb_blank_supported:
+            control_methods.append("fb_blank")
+        item["control_methods"] = control_methods
+        item["fb_blank_supported"] = "fb_blank" in control_methods
+
+        if item["dpms"] is None and item["fb_blank_supported"] and fb_blank_state is not None:
+            item["state"] = "off" if fb_blank_state > 0 else "on"
+
         if item["status"] != "connected":
             item["controllable"] = False
             item["control_reason"] = "显示器未连接"
-        elif item["dpms_supported"] or item["enabled_writable"]:
+        elif control_methods:
             item["controllable"] = True
             item["control_reason"] = ""
         else:
             item["controllable"] = False
             if "modetest_error" in item:
                 item["control_reason"] = (
-                    "未发现可用控制属性（DPMS不可用且sysfs不可写）; "
+                    "未发现可用控制属性（DPMS不可用、sysfs不可写、fb_blank不可用）; "
                     + item["modetest_error"]
                 )
             else:
-                item["control_reason"] = "未发现可用控制属性（DPMS不可用且sysfs不可写）"
-
-        result.append(item)
+                item["control_reason"] = "未发现可用控制属性（DPMS不可用、sysfs不可写、fb_blank不可用）"
 
     return result
 
@@ -352,63 +477,92 @@ def resolve_target_connector(name_or_sys):
 
 def set_connector_dpms(target, turn_on):
     if not target:
-        return False, "no target connector"
+        return False, "dpms", "no target connector"
     connector_id = target.get("connector_id")
     if connector_id is None:
-        return False, "connector has no DPMS property"
+        return False, "dpms", "connector has no DPMS property"
 
+    attempts = []
     value = 0 if turn_on else 3
-    rc, out, err = run_cmd(
-        ["modetest", "-w", f"{connector_id}:DPMS:{value}"],
-        timeout=10,
-    )
-    if rc != 0:
-        return False, (err.strip() or out.strip() or "modetest set DPMS failed")
-    return True, "ok"
+    module_name = (target.get("module") or "").strip()
+    commands = []
+    if module_name:
+        commands.append(
+            (
+                f"dpms_modetest_{module_name}",
+                ["modetest", "-M", module_name, "-w", f"{connector_id}:DPMS:{value}"],
+            )
+        )
+    commands.append(("dpms_modetest_auto", ["modetest", "-w", f"{connector_id}:DPMS:{value}"]))
+
+    seen = set()
+    for method, cmd in commands:
+        cmd_key = tuple(cmd)
+        if cmd_key in seen:
+            continue
+        seen.add(cmd_key)
+        rc, out, err = run_cmd(cmd, timeout=10)
+        if rc == 0:
+            return True, method, "ok"
+        attempts.append(f"{method}: {err.strip() or out.strip() or 'modetest set DPMS failed'}")
+
+    return False, "dpms", "; ".join(attempts) or "modetest set DPMS failed"
 
 
 def set_connector_sysfs_enabled(target, turn_on):
     if not target:
-        return False, "no target connector"
+        return False, "sysfs_enabled", "no target connector"
     connector_path = target.get("path")
     if not connector_path:
         connector_path = os.path.join(DRM_CLASS_PATH, target.get("sys_name", ""))
     enabled_path = os.path.join(connector_path, "enabled")
     if not os.path.exists(enabled_path):
-        return False, "connector has no sysfs enabled control"
+        return False, "sysfs_enabled", "connector has no sysfs enabled control"
 
     # kernel expects string values in this file
     target_value = "enabled" if turn_on else "disabled"
     ok, msg = write_text_file(enabled_path, target_value)
     if not ok:
-        return False, f"write {enabled_path} failed: {msg}"
+        return False, "sysfs_enabled", f"write {enabled_path} failed: {msg}"
 
     now = read_text_file(enabled_path)
     if now not in ("enabled", "disabled"):
-        return False, f"unexpected sysfs enabled value: {now}"
+        return False, "sysfs_enabled", f"unexpected sysfs enabled value: {now}"
     if (turn_on and now != "enabled") or ((not turn_on) and now != "disabled"):
-        return False, f"sysfs enabled verify failed: {now}"
-    return True, "ok"
+        return False, "sysfs_enabled", f"sysfs enabled verify failed: {now}"
+    return True, "sysfs_enabled", "ok"
 
 
-def set_connector_power(target, turn_on):
+def set_connector_power(target, turn_on, all_items=None):
+    errors = []
+
     # 1) try DPMS via modetest (preferred)
-    ok, message = set_connector_dpms(target, turn_on)
+    ok, method, message = set_connector_dpms(target, turn_on)
     if ok:
-        return True, "dpms", "ok"
-
-    dpms_error = message
+        return True, method, "ok"
+    errors.append(f"dpms failed: {message}")
 
     # 2) fallback to sysfs enabled toggle
-    ok2, message2 = set_connector_sysfs_enabled(target, turn_on)
+    ok2, method2, message2 = set_connector_sysfs_enabled(target, turn_on)
     if ok2:
-        return True, "sysfs_enabled", "ok"
+        return True, method2, "ok"
+    errors.append(f"sysfs fallback failed: {message2}")
 
-    return (
-        False,
-        "none",
-        f"dpms failed: {dpms_error}; sysfs fallback failed: {message2}",
-    )
+    # 3) final fallback: framebuffer blank for single-display environments
+    connected_count = 0
+    if isinstance(all_items, list):
+        connected_count = sum(
+            1 for item in all_items if item.get("status") == "connected"
+        )
+    if connected_count <= 1:
+        ok3, method3, message3 = set_framebuffer_blank(turn_on)
+        if ok3:
+            return True, method3, message3
+        errors.append(f"fb blank fallback failed: {message3}")
+    else:
+        errors.append("fb blank fallback skipped: multiple connected displays")
+
+    return False, "none", "; ".join(errors)
 
 
 def main():
@@ -446,7 +600,11 @@ def main():
                 }
             )
 
-        ok, method, message = set_connector_power(target, turn_on=(state == "on"))
+        ok, method, message = set_connector_power(
+            target,
+            turn_on=(state == "on"),
+            all_items=all_items,
+        )
         if not ok:
             respond(
                 {
@@ -461,6 +619,7 @@ def main():
             {
                 "ok": True,
                 "message": f"screen {state}",
+                "detail": message,
                 "method": method,
                 "target": target.get("sys_name"),
                 "connectors": refreshed,
