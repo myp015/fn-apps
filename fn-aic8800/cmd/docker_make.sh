@@ -26,6 +26,38 @@ Flags:
 EOF
 }
 
+die() {
+  local rc=1
+
+  if [ "$#" -gt 0 ] && [[ $1 =~ ^[0-9]+$ ]]; then
+    rc="$1"
+    shift
+  fi
+
+  [ "$#" -gt 0 ] && echo "ERROR: $*" >&2
+  exit "${rc}"
+}
+
+CONTAINER_NAME=""
+PULLED_IMAGE=false
+cleanup_docker() {
+  local rc="${1:-$?}"
+
+  trap - EXIT
+
+  if [ -n "${CONTAINER_NAME:-}" ] && docker container inspect "${CONTAINER_NAME}" >/dev/null 2>&1; then
+    echo "Cleaning up Docker container ${CONTAINER_NAME}..."
+    docker rm -f "${CONTAINER_NAME}" >/dev/null 2>&1 || echo "WARN: Failed to remove container ${CONTAINER_NAME}" >&2
+  fi
+
+  if [ "${PULLED_IMAGE:-false}" = true ]; then
+    echo "Removing pulled Docker image ${IMAGE}..."
+    docker rmi "${IMAGE}" >/dev/null 2>&1 || echo "WARN: Failed to remove Docker image ${IMAGE}" >&2
+  fi
+
+  exit "${rc}"
+}
+
 BUILD=""
 SPACE=""
 IMAGE=""
@@ -37,10 +69,7 @@ if [ "$#" -eq 0 ]; then
   exit 11
 fi
 
-if ! docker --version >/dev/null 2>&1; then
-  echo "ERROR: Docker is not installed." >&2
-  exit 21
-fi
+docker --version >/dev/null 2>&1 || die 21 "ERROR: Docker is not installed."
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -130,18 +159,16 @@ if [ -z "${BUILD}" ]; then
     BUILD="/usr/src/linux-headers-${KVER}"
   fi
 fi
-if [ ! -f "${BUILD}/Makefile" ]; then
-  echo "ERROR: Please specify a valid kernel build directory with -C option." >&2
-  exit 13
-fi
+[ ! -f "${BUILD}/Makefile" ] && die 13 "ERROR: Please specify a valid kernel build directory with -C option."
+BUILD="$(realpath -m -- "${BUILD}")"
 
 SPACE="${SPACE:-$(pwd)}"
-if [ ! -f "${SPACE}/Makefile" ]; then
-  echo "ERROR: Please specify a valid workspace directory with M= option." >&2
-  exit 14
-fi
+[ ! -f "${SPACE}/Makefile" ] && die 14 "ERROR: Please specify a valid workspace directory with M= option."
+SPACE="$(realpath -m -- "${SPACE}")"
 
 [ ${#PKGS[@]} -eq 0 ] && PKGS+=(build-essential)
+CONTAINER_NAME="docker_make_${$}_$(date +%s)"
+trap cleanup_docker EXIT
 
 echo "Docker image : ${IMAGE}"
 echo "Install pkgs : ${PKGS[*]}"
@@ -155,10 +182,8 @@ echo "Running build inside Docker..."
 HAS_DOCKER_IMAGE=$(docker images -q "${IMAGE}" 2>/dev/null)
 [ -n "${HAS_DOCKER_IMAGE}" ] || {
   echo "Docker image ${IMAGE} not found locally; pulling..."
-  if ! docker pull "${IMAGE}" 2>/dev/null; then
-    echo "ERROR: Failed to pull Docker image ${IMAGE}" >&2
-    exit 22
-  fi
+  docker pull "${IMAGE}" 2>/dev/null || die "Failed to pull Docker image ${IMAGE}"
+  PULLED_IMAGE=true
 }
 
 # Escape MAKE_ARGS for safe embedding in bash -lc
@@ -174,7 +199,8 @@ for p in "${PKGS[@]}"; do
   PKGS_ESCAPED+=" $(printf '%q' "${p}")"
 done
 
-docker run --rm -v /usr:/usr.host:ro -v "${BUILD}":"${BUILD}":ro -v "${SPACE}":"${SPACE}":rw -w "${SPACE}" "${IMAGE}" bash -lc "
+docker run --rm --name "${CONTAINER_NAME}" -v /usr:/usr.host:ro -v "${BUILD}":"${BUILD}":ro -v "${SPACE}":"${SPACE}":rw -w "${SPACE}" "${IMAGE}" bash -lc "
+#!/bin/bash
 set -euo pipefail
 [ -r /etc/os-release ] && . /etc/os-release || true
 # Use Chinese mirrors (Tsinghua) for faster apt in China
@@ -204,11 +230,6 @@ PATH=/usr.host/bin:/usr.host/sbin:\${PATH:-} LD_LIBRARY_PATH=/usr.host/lib/x86_6
 "
 rc=$?
 
-[ -n "${HAS_DOCKER_IMAGE}" ] || {
-  echo "Removing pulled Docker image ${IMAGE}..."
-  docker rmi "${IMAGE}" || true
-}
-
 # Fix ownership of generated files so they aren't owned by root
 HOST_UID=$(id -u)
 HOST_GID=$(id -g)
@@ -217,6 +238,9 @@ if [ "${HOST_UID}" -ne 0 ]; then
   sudo chown -R ${HOST_UID}:${HOST_GID} "${SPACE}" || true
 fi
 
-[ "${rc}" -eq 0 ] || { rc=3${rc}; echo "Build failed with exit code ${rc}" >&2; }
+[ "${rc}" -eq 0 ] || {
+  rc=3${rc}
+  echo "Build failed with exit code ${rc}" >&2
+}
 
-exit ${rc}
+cleanup_docker "${rc}"

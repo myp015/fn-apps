@@ -12,8 +12,8 @@ if [ ! -f "${TRIM_APPDEST}/server/src/Makefile" ]; then
 fi
 
 # Build the module
-$(dirname $0)/docker_make.sh --pkgs build-essential bc -- \
-  make -C /lib/modules/${KVER}/build M="${TRIM_APPDEST}/server/src" CONFIG_NTFS3_FS=m CONFIG_NTFS3_LZX_XPRESS=y modules 2>$TRIM_TEMP_LOGFILE
+bash "$(dirname "$0")/chroot_make.sh" --pkgs build-essential bc -- \
+  make -C /lib/modules/${KVER}/build M="${TRIM_APPDEST}/server/src" modules 2>$TRIM_TEMP_LOGFILE
 [ $? -ne 0 ] && exit 1
 
 if [ ! -f "${TRIM_APPDEST}/server/src/yt6801.ko" ]; then
