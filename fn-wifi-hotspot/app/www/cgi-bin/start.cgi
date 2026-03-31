@@ -48,7 +48,7 @@ if command -v nmcli >/dev/null 2>&1; then
   case "$sta_prev_con" in "" | "--") sta_prev_con="" ;; esac
 fi
 
-if iw_supports_sta_ap; then
+if [ -n "${sta_prev_con:-}" ] && iw_supports_sta_ap; then
   virtual_iface="$(mk_ap_iface_name "$IFACE")"
   if ensure_virtual_ap_iface "$IFACE" "$virtual_iface"; then
     hotspot_iface="$virtual_iface"
@@ -77,17 +77,24 @@ if [ -n "${sta_prev_con:-}" ]; then
 fi
 
 out=""
+nmcli_wait="${NMCLI_WAIT_SECS:-20}"
 # Create and activate the hotspot.
 # Always delete and recreate (avoid stale/partial profiles).
 nmcli con down id "$SSID" >/dev/null 2>&1 || true
 nmcli con delete "$SSID" >/dev/null 2>&1 || true
 nmcli device disconnect "$hotspot_iface" >/dev/null 2>&1 || true
-if ! out="$(nmcli dev wifi hotspot ifname "$hotspot_iface" con-name "$SSID" ssid "$SSID" password "$PASSWORD" band "$BAND" channel "$CHANNEL" 2>&1)"; then
+if ! out="$(nmcli --wait "$nmcli_wait" dev wifi hotspot ifname "$hotspot_iface" con-name "$SSID" ssid "$SSID" password "$PASSWORD" band "$BAND" channel "$CHANNEL" 2>&1)"; then
+  rc=$?
   nmcli con down id "$SSID" >/dev/null 2>&1 || true
   nmcli con delete "$SSID" >/dev/null 2>&1 || true
   nmcli device disconnect "$hotspot_iface" >/dev/null 2>&1 || true
   if [ -n "${sta_prev_con:-}" ]; then
     nmcli con up id "$sta_prev_con" >/dev/null 2>&1 || true
+  fi
+  out="$(sanitize_text "${out:-}" || true)"
+  if [ "$rc" -eq 8 ] 2>/dev/null; then
+    http_err "504 Gateway Timeout" "Hotspot setup timed out after ${nmcli_wait}s.
+$out"
   fi
   http_err "500 Internal Server Error" "$out"
 fi
@@ -122,11 +129,23 @@ fi
 if [ -n "${IP_CIDR:-}" ]; then
   nmcli con mod "$SSID" ipv4.method shared ipv4.addresses "$IP_CIDR" >/dev/null 2>&1 || true
 fi
-if ! nmcli_out="$(nmcli con up id "$SSID" 2>&1)"; then
-  nmcli_err="$(sanitize_text "${nmcli_out:-}" || true)"
-  http_err "500 Internal Server Error" "nmcli: failed to bring up hotspot connection '$SSID'
+
+# `nmcli dev wifi hotspot` already creates and activates the AP connection.
+# Re-activating the same connection here can tear down a just-started hotspot
+# and surface "Device disconnected by user or client" or UI timeouts.
+dev_state="$(nmcli -g GENERAL.STATE dev show "$hotspot_iface" 2>/dev/null | head -n1 || true)"
+case "${dev_state:-}" in
+  100* | *activated*)
+    :
+    ;;
+  *)
+    if ! nmcli_out="$(nmcli --wait 15 con up id "$SSID" 2>&1)"; then
+      nmcli_err="$(sanitize_text "${nmcli_out:-}" || true)"
+      http_err "500 Internal Server Error" "nmcli: failed to bring up hotspot connection '$SSID'
 $nmcli_err"
-fi
+    fi
+    ;;
+esac
 
 # Best-effort: ensure hotspot clients can reach internet.
 # Some environments don't set up NAT automatically.

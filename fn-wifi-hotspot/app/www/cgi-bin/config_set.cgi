@@ -23,6 +23,7 @@ CHANNEL_WIDTH="$(form_get channelWidth "$body")"
 
 # Option B: persist a concrete iface even if client submits empty.
 ensure_iface
+IFACE="$(normalize_parent_wifi_iface "${IFACE:-}")"
 
 validate_cfg || http_err "400 Bad Request" "${CFG_ERR:-invalid config}"
 

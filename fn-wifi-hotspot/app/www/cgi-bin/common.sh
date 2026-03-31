@@ -29,6 +29,35 @@ trim_ws() {
   printf '%s' "$1" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//'
 }
 
+normalize_parent_wifi_iface() {
+  iface="$(trim_ws "${1:-}")"
+  [ -n "${iface:-}" ] || {
+    printf '%s' ""
+    return 0
+  }
+
+  command -v iw >/dev/null 2>&1 || {
+    printf '%s' "$iface"
+    return 0
+  }
+
+  while :; do
+    case "$iface" in
+      *ap)
+        candidate="${iface%ap}"
+        [ -n "${candidate:-}" ] || break
+        iw dev "$candidate" info >/dev/null 2>&1 || break
+        iface="$candidate"
+        ;;
+      *)
+        break
+        ;;
+    esac
+  done
+
+  printf '%s' "$iface"
+}
+
 shell_quote() {
   printf "'%s'" "$(printf '%s' "${1:-}" | sed "s/'/'\\\\''/g")"
 }
@@ -841,18 +870,32 @@ http_ok_json() {
 wifi_ifaces() {
   if command -v nmcli >/dev/null 2>&1; then
     # TYPE 在不同环境可能是 wifi / wifi-p2p / 802-11-wireless 等
-    nmcli -t -f DEVICE,TYPE dev status 2>/dev/null | awk -F: '
-      # Exclude Wi‑Fi P2P virtual devices (e.g. p2p-dev-wlo1, type wifi-p2p)
-      ($2 == "wifi-p2p") {next}
-      ($2 == "wifi") || ($2 ~ /wireless/) {print $1}
-    '
+    nmcli -t -f DEVICE,TYPE dev status 2>/dev/null \
+      | while IFS=: read -r dev type; do
+          case "$type" in
+            wifi-p2p)
+              continue
+              ;;
+            wifi | *wireless*)
+              normalize_parent_wifi_iface "$dev"
+              printf '\n'
+              ;;
+          esac
+        done \
+      | awk '!seen[$0]++'
     return 0
   fi
 
   # Fallback: parse from `iw dev` output
   if command -v iw >/dev/null 2>&1; then
     iw dev 2>/dev/null | sed -n 's/^\s*Interface \(.*\)$/\1/p' \
-      | awk '!/^p2p-/ && !/^p2p-dev-/'
+      | awk '!/^p2p-/ && !/^p2p-dev-/' \
+      | while IFS= read -r dev; do
+          [ -n "${dev:-}" ] || continue
+          normalize_parent_wifi_iface "$dev"
+          printf '\n'
+        done \
+      | awk '!seen[$0]++'
     return 0
   fi
 
@@ -972,6 +1015,7 @@ ensure_iface() {
       IFACE="$(wifi_ifaces | head -n1 2>/dev/null || true)"
     fi
   fi
+  IFACE="$(normalize_parent_wifi_iface "${IFACE:-}")"
 }
 
 require_wifi_iface() {
@@ -1008,6 +1052,8 @@ load_cfg() {
   : "${BAND:=$DEFAULT_BAND}"
   : "${CHANNEL:=$DEFAULT_CHANNEL}"
   : "${CHANNEL_WIDTH:=$DEFAULT_CHANNEL_WIDTH}"
+
+  IFACE="$(normalize_parent_wifi_iface "${IFACE:-}")"
 }
 
 save_cfg() {
