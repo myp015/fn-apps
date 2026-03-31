@@ -1,0 +1,15 @@
+[
+  {
+    "stepTitle": "安装向导",
+    "items": [
+      {
+        "type": "tips",
+        "helpText": "欢迎使用 ZeroTier。"
+      },
+      {
+        "type": "tips",
+        "helpText": "1. 安装完成后请在应用页面中输入 16 位 Network ID 加入你的 ZeroTier 网络。"
+      }
+    ]
+  }
+]

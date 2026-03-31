@@ -1,0 +1,49 @@
+#!/bin/bash
+
+LOG_FILE="${TRIM_PKGVAR}/info.log"
+PID_FILE="${TRIM_PKGVAR}/app.pid"
+
+# write the command to start your program here
+CMD=""
+
+log_msg() {
+  echo "$(date '+%Y-%m-%d %H:%M:%S') - $1" >>${LOG_FILE}
+}
+
+start_process() {
+  if status; then
+    return 0
+  fi
+
+  log_msg "Starting process ..."
+  systemctl start zerotier-one.service >>"${LOG_FILE}" 2>&1
+}
+
+stop_process() {
+  log_msg "Stopping process ..."
+  systemctl stop zerotier-one.service >>"${LOG_FILE}" 2>&1 || true
+  return 0
+}
+
+status() {
+  systemctl is-active --quiet zerotier-one.service
+}
+
+case "$1" in
+  start)
+    start_process
+    ;;
+  stop)
+    stop_process
+    ;;
+  status)
+    if status; then
+      exit 0
+    else
+      exit 3
+    fi
+    ;;
+  *)
+    exit 1
+    ;;
+esac

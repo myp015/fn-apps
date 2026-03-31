@@ -1,0 +1,7 @@
+{
+  "defaults": {
+    "run-as": "root"
+  },
+  "username": "zerotier-one",
+  "groupname": "zerotier-one"
+}

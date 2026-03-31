@@ -1,0 +1,13 @@
+appname               = fn-zerotier
+version               = 1.0.0
+display_name          = ZeroTier
+desc                  = ZeroTier 是一个无中心的虚拟网络，无需配置即可连接设备。
+platform              = all
+source                = thirdparty
+desktop_uidir         = ui
+desktop_applaunchname = fn-zerotier.Application
+maintainer            = Ing
+maintainer_url        = https://github.com/RROrg
+distributor           = RROrg
+distributor_url       = https://github.com/RROrg/fn-apps
+install_type          = root
