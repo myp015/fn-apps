@@ -126,26 +126,40 @@ if [ -n "${CHANNEL_WIDTH:-}" ]; then
   esac
 fi
 # Apply optional IP/CIDR for shared network.
+desired_ip_cidr=""
 if [ -n "${IP_CIDR:-}" ]; then
-  nmcli con mod "$SSID" ipv4.method shared ipv4.addresses "$IP_CIDR" >/dev/null 2>&1 || true
+  if ! nmcli con mod "$SSID" ipv4.method shared ipv4.addresses "$IP_CIDR" >/dev/null 2>&1; then
+    http_err "500 Internal Server Error" "nmcli: failed to apply hotspot IPv4 address '$IP_CIDR'"
+  fi
+  desired_ip_cidr="$IP_CIDR"
 fi
 
-# `nmcli dev wifi hotspot` already creates and activates the AP connection.
-# Re-activating the same connection here can tear down a just-started hotspot
-# and surface "Device disconnected by user or client" or UI timeouts.
 dev_state="$(nmcli -g GENERAL.STATE dev show "$hotspot_iface" 2>/dev/null | head -n1 || true)"
+current_ip_cidr="$(ip -4 addr show dev "$hotspot_iface" 2>/dev/null | awk '/inet[[:space:]]/{print $2; exit}' || true)"
+needs_reactivate="false"
+
 case "${dev_state:-}" in
   100* | *activated*)
     :
     ;;
   *)
-    if ! nmcli_out="$(nmcli --wait 15 con up id "$SSID" 2>&1)"; then
-      nmcli_err="$(sanitize_text "${nmcli_out:-}" || true)"
-      http_err "500 Internal Server Error" "nmcli: failed to bring up hotspot connection '$SSID'
-$nmcli_err"
-    fi
+    needs_reactivate="true"
     ;;
 esac
+
+if [ -n "${desired_ip_cidr:-}" ] && [ "${current_ip_cidr:-}" != "${desired_ip_cidr:-}" ]; then
+  needs_reactivate="true"
+fi
+
+if [ "$needs_reactivate" = "true" ]; then
+  nmcli con down id "$SSID" >/dev/null 2>&1 || true
+  nmcli device disconnect "$hotspot_iface" >/dev/null 2>&1 || true
+  if ! nmcli_out="$(nmcli --wait 15 con up id "$SSID" 2>&1)"; then
+    nmcli_err="$(sanitize_text "${nmcli_out:-}" || true)"
+    http_err "500 Internal Server Error" "nmcli: failed to bring up hotspot connection '$SSID'
+$nmcli_err"
+  fi
+fi
 
 # Best-effort: ensure hotspot clients can reach internet.
 # Some environments don't set up NAT automatically.
