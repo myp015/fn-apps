@@ -1,8 +1,8 @@
 @echo off
 setlocal enabledelayedexpansion
 
-REM fnpack.exe create fn-kodi -t docker --without-ui true
-REM fnpack.exe build --directory fn-kodi
+REM .\fnpack.exe create fn-kodi -t docker --without-ui true
+REM .\fnpack.exe build --directory fn-kodi
 
 curl -kL https://static2.fnnas.com/fnpack/fnpack-1.0.4-windows-amd64 -o fnpack.exe
 
@@ -35,7 +35,7 @@ for /d %%A in (fn-*) do (
     if exist  "%%A\build.bat" (
       call "%%A\build.bat"
       ) else (
-      fnpack.exe build --directory %%A
+      .\fnpack.exe build --directory %%A
       if defined APPNAME if defined VERSION if exist "!APPNAME!.fpk" (
         move /y "!APPNAME!.fpk" "!APPNAME!_v!VERSION!.fpk" >nul
       )
