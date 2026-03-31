@@ -40,11 +40,16 @@ DEFAULT_HOST = "0.0.0.0"
 DEFAULT_PORT = 28256
 DEFAULT_SOCKET_PATH = os.path.join(ROOT_DIR, "fn-scheduler.sock")
 DEFAULT_DB_PATH = os.path.join(ROOT_DIR, "scheduler.db")
+DEFAULT_SETTINGS_PATH = os.path.join(ROOT_DIR, "scheduler.settings.json")
 DB_LATEST_VERSION = 2
 
 TASK_TIMEOUT = int(os.environ.get("SCHEDULER_TASK_TIMEOUT", "900"))
 CONDITION_TIMEOUT = int(os.environ.get("SCHEDULER_CONDITION_TIMEOUT", "60"))
 MAX_LOOKAHEAD_MINUTES = 60 * 24 * 366  # one leap year
+RESULT_LOG_PREVIEW_LIMIT = int(os.environ.get("SCHEDULER_RESULT_LOG_PREVIEW_LIMIT", "4000"))
+RESULT_RETENTION_PER_TASK = int(
+    os.environ.get("SCHEDULER_RESULT_RETENTION_PER_TASK", "200")
+)
 EVENT_TYPE_SCRIPT = "script"
 EVENT_TYPE_BOOT = "system_boot"
 EVENT_TYPE_SHUTDOWN = "system_shutdown"
@@ -92,6 +97,122 @@ def strip_wrapping_quotes(value: Optional[str]) -> Optional[str]:
     if len(trimmed) >= 2 and trimmed[0] == trimmed[-1] and trimmed[0] in {'"', "'"}:
         return trimmed[1:-1]
     return trimmed
+
+
+def serialize_result_row(
+    row: Dict[str, Any], include_log: bool = True, log_limit: Optional[int] = None
+) -> Dict[str, Any]:
+    payload = dict(row)
+    log_text = payload.get("log") or ""
+    if not isinstance(log_text, str):
+        log_text = str(log_text)
+
+    log_size = len(log_text)
+    if log_limit is not None and log_limit >= 0:
+        log_preview = log_text[:log_limit]
+        log_truncated = log_size > log_limit
+    else:
+        log_preview = log_text
+        log_truncated = False
+
+    payload["log_size"] = log_size
+    payload["log_preview"] = log_preview
+    payload["log_truncated"] = log_truncated
+
+    if include_log:
+        payload["log"] = log_text
+    else:
+        payload.pop("log", None)
+
+    return payload
+
+
+class SchedulerSettings:
+    def __init__(self, path: str):
+        self.path = path
+        self._lock = threading.RLock()
+        self._data = {
+            "task_timeout": TASK_TIMEOUT,
+            "condition_timeout": CONDITION_TIMEOUT,
+            "result_log_preview_limit": RESULT_LOG_PREVIEW_LIMIT,
+            "result_retention_per_task": RESULT_RETENTION_PER_TASK,
+        }
+        self._load()
+
+    def _sanitize(self, raw: Dict[str, Any]) -> Dict[str, int]:
+        data = dict(self._data)
+
+        def _read_int(key: str, minimum: int) -> None:
+            if key not in raw:
+                return
+            value = int(raw[key])
+            if value < minimum:
+                raise ValueError(f"{key} must be >= {minimum}")
+            data[key] = value
+
+        _read_int("task_timeout", 0)
+        _read_int("condition_timeout", 1)
+        _read_int("result_log_preview_limit", 256)
+        _read_int("result_retention_per_task", 0)
+        return data
+
+    def _load(self) -> None:
+        if not os.path.exists(self.path):
+            return
+        try:
+            with open(self.path, "r", encoding="utf-8") as fp:
+                loaded = json.load(fp)
+            if isinstance(loaded, dict):
+                with self._lock:
+                    self._data = self._sanitize(loaded)
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.warning("Failed to load scheduler settings from %s: %s", self.path, exc)
+
+    def _save(self) -> None:
+        settings_dir = os.path.dirname(self.path)
+        if settings_dir:
+            os.makedirs(settings_dir, exist_ok=True)
+        fd, tmp_path = tempfile.mkstemp(prefix="scheduler-settings-", suffix=".json", dir=settings_dir or None)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as fp:
+                json.dump(self._data, fp, ensure_ascii=False, indent=2, sort_keys=True)
+            os.replace(tmp_path, self.path)
+        finally:
+            if os.path.exists(tmp_path):
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
+
+    def to_dict(self) -> Dict[str, int]:
+        with self._lock:
+            return dict(self._data)
+
+    def update(self, raw: Dict[str, Any]) -> Dict[str, int]:
+        with self._lock:
+            self._data = self._sanitize(raw)
+            self._save()
+            return dict(self._data)
+
+    @property
+    def task_timeout(self) -> int:
+        with self._lock:
+            return int(self._data["task_timeout"])
+
+    @property
+    def condition_timeout(self) -> int:
+        with self._lock:
+            return int(self._data["condition_timeout"])
+
+    @property
+    def result_log_preview_limit(self) -> int:
+        with self._lock:
+            return int(self._data["result_log_preview_limit"])
+
+    @property
+    def result_retention_per_task(self) -> int:
+        with self._lock:
+            return int(self._data["result_retention_per_task"])
 
 
 logger = logging.getLogger("fn_scheduler")
@@ -296,8 +417,9 @@ class CronExpression:
 
 
 class Database:
-    def __init__(self, path: str):
+    def __init__(self, path: str, result_retention_per_task: int = RESULT_RETENTION_PER_TASK):
         self.path = path
+        self.result_retention_per_task = result_retention_per_task
         db_dir = os.path.dirname(path)
         if db_dir:
             os.makedirs(db_dir, exist_ok=True)
@@ -330,6 +452,14 @@ class Database:
             if version < DB_LATEST_VERSION:
                 cur.execute(f"PRAGMA user_version={DB_LATEST_VERSION};")
             self._conn.commit()
+        if self.result_retention_per_task > 0:
+            deleted = self.prune_all_finished_results()
+            if deleted > 0:
+                logger.info(
+                    "Pruned %s finished task results (retention per task=%s)",
+                    deleted,
+                    self.result_retention_per_task,
+                )
 
         try:
             with self._lock:
@@ -659,6 +789,39 @@ class Database:
             self._conn.commit()
             return cur.rowcount > 0
 
+    def prune_finished_results(self, task_id: int) -> int:
+        if self.result_retention_per_task <= 0:
+            return 0
+        with self._lock:
+            cur = self._conn.execute(
+                """
+                DELETE FROM task_results
+                WHERE task_id = ?
+                  AND status != 'running'
+                  AND id NOT IN (
+                      SELECT id FROM task_results
+                      WHERE task_id = ?
+                        AND status != 'running'
+                      ORDER BY COALESCE(finished_at, started_at) DESC, id DESC
+                      LIMIT ?
+                  )
+                """,
+                (task_id, task_id, self.result_retention_per_task),
+            )
+            self._conn.commit()
+            return cur.rowcount
+
+    def prune_all_finished_results(self) -> int:
+        if self.result_retention_per_task <= 0:
+            return 0
+        with self._lock:
+            cur = self._conn.execute("SELECT id FROM tasks")
+            task_ids = [int(row[0]) for row in cur.fetchall()]
+        deleted = 0
+        for task_id in task_ids:
+            deleted += self.prune_finished_results(task_id)
+        return deleted
+
     def record_result_start(self, task_id: int, trigger_reason: str) -> int:
         now = isoformat(time_now())
         with self._lock:
@@ -674,12 +837,21 @@ class Database:
 
     def finalize_result(self, result_id: int, status: str, log_text: str) -> None:
         now = isoformat(time_now())
+        task_id: Optional[int] = None
         with self._lock:
+            cur = self._conn.execute(
+                "SELECT task_id FROM task_results WHERE id=?",
+                (result_id,),
+            )
+            row = cur.fetchone()
+            task_id = int(row[0]) if row else None
             self._conn.execute(
                 "UPDATE task_results SET status=?, finished_at=?, log=? WHERE id=?",
                 (status, now, log_text, result_id),
             )
             self._conn.commit()
+        if task_id is not None:
+            self.prune_finished_results(task_id)
 
     def fetch_results(
         self, task_id: int, limit: int = 50, offset: int = 0
@@ -921,17 +1093,24 @@ class TaskRunner(threading.Thread):
     _running_lock = threading.RLock()
     _running_processes: Dict[int, Set[Popen[str]]] = {}
 
-    def __init__(self, db: Database, task: Dict[str, Any], trigger_reason: str):
+    def __init__(
+        self,
+        db: Database,
+        task: Dict[str, Any],
+        trigger_reason: str,
+        settings: SchedulerSettings,
+    ):
         super().__init__(daemon=True)
         self.db = db
         self.task = task
         self.trigger_reason = trigger_reason
+        self.settings = settings
 
     def run(self) -> None:
         task_id = self.task["id"]
         logger.info("Executing task %s (%s)", task_id, self.trigger_reason)
         result_id = self.db.record_result_start(task_id, self.trigger_reason)
-        execution_timeout = None  # TASK_TIMEOUT
+        execution_timeout = self.settings.task_timeout or None
         try:
             log_text, status = self._execute_script(
                 self.task["script_body"], execution_timeout
@@ -1200,8 +1379,9 @@ class TaskRunner(threading.Thread):
 
 
 class SchedulerEngine:
-    def __init__(self, db: Database):
+    def __init__(self, db: Database, settings: SchedulerSettings):
         self.db = db
+        self.settings = settings
         self.stop_event = threading.Event()
         self.thread = threading.Thread(target=self._loop, daemon=True)
         # 记录服务启动时间，用于跳过重启前已过期的定时任务
@@ -1265,7 +1445,7 @@ class SchedulerEngine:
                     moment + timedelta(minutes=1),
                 )
                 continue
-            TaskRunner(self.db, task, "schedule").start()
+            TaskRunner(self.db, task, "schedule", self.settings).start()
             self.db.schedule_next_run(task["id"], task["schedule_expression"], moment)
 
     def _process_event_tasks(self, moment: datetime) -> None:
@@ -1284,7 +1464,7 @@ class SchedulerEngine:
                 continue
             if not self._dependencies_met(task):
                 continue
-            TaskRunner(self.db, task, "condition").start()
+            TaskRunner(self.db, task, "condition", self.settings).start()
 
     def _run_condition(self, task: Dict[str, Any]) -> bool:
         command = TaskRunner._build_command(task["condition_script"])
@@ -1293,7 +1473,7 @@ class SchedulerEngine:
                 command,
                 capture_output=True,
                 text=True,
-                timeout=CONDITION_TIMEOUT,
+                timeout=self.settings.condition_timeout,
                 check=False,
             )
         except TimeoutExpired as exc:
@@ -1326,7 +1506,7 @@ class SchedulerEngine:
                 continue
             if not self._dependencies_met(task):
                 continue
-            runner = TaskRunner(self.db, task, trigger_reason)
+            runner = TaskRunner(self.db, task, trigger_reason, self.settings)
             runner.start()
             runners.append(runner)
         for runner in runners:
@@ -1339,9 +1519,10 @@ class SchedulerEngine:
 
 
 class SchedulerContext:
-    def __init__(self, db: Database, engine: SchedulerEngine):
+    def __init__(self, db: Database, engine: SchedulerEngine, settings: SchedulerSettings):
         self.db = db
         self.engine = engine
+        self.settings = settings
 
 
 class SchedulerHTTPServer(ThreadingHTTPServer):
@@ -1475,6 +1656,13 @@ class SchedulerRequestHandler(BaseHTTPRequestHandler):
             if resource == "accounts" and method == "GET":
                 self._list_accounts()
                 return
+            if resource == "settings":
+                if method == "GET":
+                    self._get_settings()
+                    return
+                if method == "PUT":
+                    self._update_settings()
+                    return
             if resource == "templates":
                 self._handle_templates(method, segments[1:])
                 return
@@ -1509,6 +1697,18 @@ class SchedulerRequestHandler(BaseHTTPRequestHandler):
             },
         }
         self._json_response(payload)
+
+    def _get_settings(self) -> None:
+        ctx: SchedulerContext = self.server.app_context  # type: ignore[attr-defined]
+        self._json_response({"data": ctx.settings.to_dict()})
+
+    def _update_settings(self) -> None:
+        ctx: SchedulerContext = self.server.app_context  # type: ignore[attr-defined]
+        payload = self._read_json() or {}
+        updated = ctx.settings.update(payload)
+        ctx.db.result_retention_per_task = updated["result_retention_per_task"]
+        pruned = ctx.db.prune_all_finished_results()
+        self._json_response({"data": updated, "pruned": pruned})
 
     def _handle_tasks(self, method: str, remainder: List[str]) -> None:
         ctx: SchedulerContext = self.server.app_context  # type: ignore[attr-defined]
@@ -1593,8 +1793,13 @@ class SchedulerRequestHandler(BaseHTTPRequestHandler):
                 return
             if action == "results":
                 if method == "GET":
-                    self._list_results(task_id)
-                    return
+                    if len(remainder) == 2:
+                        self._list_results(task_id)
+                        return
+                    if len(remainder) == 3:
+                        result_id = int(remainder[2])
+                        self._get_result(task_id, result_id)
+                        return
                 if method == "DELETE":
                     result_id = int(remainder[2]) if len(remainder) == 3 else None
                     deleted = ctx.db.delete_results(task_id, result_id)
@@ -1743,7 +1948,7 @@ class SchedulerRequestHandler(BaseHTTPRequestHandler):
                 ):  # pylint: disable=protected-access
                     result.setdefault("blocked", []).append(task_id)
                     continue
-                runner = TaskRunner(ctx.db, task, "manual")
+                runner = TaskRunner(ctx.db, task, "manual", ctx.settings)
                 runner.start()
                 runners.append(runner)
                 result.setdefault("queued", []).append(task_id)
@@ -1787,7 +1992,7 @@ class SchedulerRequestHandler(BaseHTTPRequestHandler):
                 {"error": "dependencies are not met"}, status=HTTPStatus.BAD_REQUEST
             )
             return
-        TaskRunner(ctx.db, task, "manual").start()
+        TaskRunner(ctx.db, task, "manual", ctx.settings).start()
         self._json_response({"queued": True})
 
     def _stop_task(self, task_id: int) -> None:
@@ -1829,8 +2034,33 @@ class SchedulerRequestHandler(BaseHTTPRequestHandler):
         query = parse_qs(urlparse(self.path).query)
         limit = int(query.get("limit", [50])[0])
         offset = int(query.get("offset", [0])[0])
+        summary_mode = query.get("summary", ["0"])[0].lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
+        log_limit = int(
+            query.get("log_limit", [ctx.settings.result_log_preview_limit])[0]
+        )
         results = ctx.db.fetch_results(task_id, limit=limit, offset=offset)
-        self._json_response({"data": results})
+        payload = [
+            serialize_result_row(
+                row,
+                include_log=not summary_mode,
+                log_limit=log_limit if summary_mode else None,
+            )
+            for row in results
+        ]
+        self._json_response({"data": payload})
+
+    def _get_result(self, task_id: int, result_id: int) -> None:
+        ctx: SchedulerContext = self.server.app_context  # type: ignore[attr-defined]
+        result = ctx.db.fetch_result(task_id, result_id)
+        if not result:
+            self.send_error(HTTPStatus.NOT_FOUND)
+            return
+        self._json_response({"data": serialize_result_row(result, include_log=True)})
 
     def _handle_fs(self, method: str, remainder: List[str]) -> None:
         # Support: GET /api/fs/list?path=... , GET /api/fs/read?path=... and POST /api/fs/write?path=...
@@ -2119,13 +2349,20 @@ def run_server(
     base_path: str = "/",
     prefer_ipv6: bool = False,
     unix_socket: Optional[str] = None,
+    settings_path: Optional[str] = None,
 ) -> None:
     db_path = strip_wrapping_quotes(db_path) or DEFAULT_DB_PATH
     base_path = strip_wrapping_quotes(base_path) or "/"
+    settings_path = strip_wrapping_quotes(settings_path) or strip_wrapping_quotes(
+        os.environ.get("SCHEDULER_SETTINGS_PATH", DEFAULT_SETTINGS_PATH)
+    ) or DEFAULT_SETTINGS_PATH
 
-    database = Database(db_path)
-    engine = SchedulerEngine(database)
-    ctx = SchedulerContext(database, engine)
+    settings = SchedulerSettings(settings_path)
+    database = Database(
+        db_path, result_retention_per_task=settings.result_retention_per_task
+    )
+    engine = SchedulerEngine(database, settings)
+    ctx = SchedulerContext(database, engine, settings)
     handler_class = SchedulerRequestHandler
     normalized_base = normalize_base_path(base_path)
 
@@ -2218,6 +2455,11 @@ def parse_args() -> argparse.Namespace:
         help="Path to SQLite database file",
     )
     parser.add_argument(
+        "--settings",
+        default=os.environ.get("SCHEDULER_SETTINGS_PATH", DEFAULT_SETTINGS_PATH),
+        help="Path to scheduler settings JSON file",
+    )
+    parser.add_argument(
         "--base-path",
         default=os.environ.get("SCHEDULER_BASE_PATH", "/"),
         help="Base URL path to mount the scheduler under (default '/')",
@@ -2232,4 +2474,5 @@ if __name__ == "__main__":
         base_path=args.base_path,
         prefer_ipv6=False,
         unix_socket=args.unix_socket,
+        settings_path=args.settings,
     )

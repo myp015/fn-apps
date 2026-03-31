@@ -478,6 +478,36 @@ button.ghost.selected {
   gap: 8px;
 }
 
+.settings-groups {
+  display: grid;
+  gap: 14px;
+}
+
+.settings-group {
+  border: 1px solid var(--border);
+  border-radius: calc(var(--radius) + 2px);
+  background: var(--bg);
+  padding: 14px;
+}
+
+.settings-group-header {
+  margin-bottom: 10px;
+}
+
+.settings-group-header h3 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.settings-group-header p {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
 /* 表单元素 */
 label {
   display: flex;
@@ -797,7 +827,25 @@ small {
   gap: 12px;
 }
 
-.result-card pre {
+.result-card-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.result-log-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+  flex-wrap: wrap;
+}
+
+.result-card pre,
+.result-log {
   background: #1e293b;
   color: #f1f5f9;
   margin: 0;

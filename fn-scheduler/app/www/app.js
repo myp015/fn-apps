@@ -4,6 +4,7 @@ const state = {
   editingTaskId: null,
   editingTaskName: '', // 添加这个字段
   currentResultTaskId: null,
+  resultLogCache: new Map(),
   accounts: [],
   accountLoading: false,
   posixSupported: true,
@@ -60,6 +61,8 @@ const elements = {
   resultModal: document.getElementById("resultModal"),
   resultSubtitle: document.getElementById("resultSubtitle"),
   resultList: document.getElementById("resultList"),
+  settingsModal: document.getElementById("settingsModal"),
+  settingsForm: document.getElementById("settingsForm"),
   toast: document.getElementById("toast"),
   cronModal: document.getElementById("cronModal"),
   cronForm: document.getElementById("cronForm"),
@@ -358,7 +361,7 @@ const buttons = {
   stop: document.getElementById("btnStop"),
   toggle: document.getElementById("btnToggle"),
   results: document.getElementById("btnResults"),
-  refresh: document.getElementById("btnRefresh"),
+  settings: document.getElementById("btnSettings"),
   clearResults: document.getElementById("btnClearResults"),
   cronGenerator: document.getElementById("btnCronGenerator"),
   applyCron: document.getElementById("btnApplyCron"),
@@ -513,8 +516,20 @@ const api = {
   stopTask(id) {
     return this.request(`api/tasks/${id}/stop`, { method: "POST" });
   },
+  fetchSettings() {
+    return this.request("api/settings");
+  },
+  updateSettings(data) {
+    return this.request("api/settings", {
+      method: "PUT",
+      body: JSON.stringify(data),
+    });
+  },
   fetchResults(id) {
-    return this.request(`api/tasks/${id}/results?limit=50`);
+    return this.request(`api/tasks/${id}/results?limit=50&summary=1`);
+  },
+  fetchResult(id, resultId) {
+    return this.request(`api/tasks/${id}/results/${resultId}`);
   },
   deleteResult(id, resultId) {
     return this.request(`api/tasks/${id}/results/${resultId}`, {
@@ -662,12 +677,45 @@ function showConfirm(message, { okText = _t('btn.ok'), cancelText = _t('btn.canc
 }
 
 function openModal(modal) {
+  if (!modal) return;
+  const active = document.activeElement;
+  if (active instanceof HTMLElement && !modal.contains(active)) {
+    modal.__returnFocusEl = active;
+  } else if (!(modal.__returnFocusEl instanceof HTMLElement)) {
+    modal.__returnFocusEl = null;
+  }
+  modal.inert = false;
+  modal.setAttribute("aria-hidden", "false");
   modal.classList.remove("hidden");
+  queueMicrotask(() => {
+    const focusTarget = modal.querySelector(
+      "[autofocus], button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex='-1'])",
+    );
+    if (focusTarget instanceof HTMLElement) {
+      focusTarget.focus();
+    }
+  });
 }
 
 function closeModal(modal) {
   if (!modal) return;
+  const active = document.activeElement;
+  if (active instanceof HTMLElement && modal.contains(active)) {
+    active.blur();
+  }
+  modal.inert = true;
+  modal.setAttribute("aria-hidden", "true");
   modal.classList.add("hidden");
+  const returnFocusEl = modal.__returnFocusEl;
+  queueMicrotask(() => {
+    if (returnFocusEl instanceof HTMLElement && returnFocusEl.isConnected && !returnFocusEl.hasAttribute("disabled")) {
+      returnFocusEl.focus();
+      return;
+    }
+    if (document.body instanceof HTMLElement) {
+      document.body.focus?.();
+    }
+  });
   // restore i18n-driven texts for any modal (will reset server file picker as well)
   try {
     applyModalI18n(modal);
@@ -1412,9 +1460,55 @@ async function openResultModal() {
     return;
   }
   state.currentResultTaskId = taskId;
+  state.resultLogCache.clear();
   elements.resultSubtitle.textContent = `${task.name} (#${task.id})`;
   openModal(elements.resultModal);
   await refreshResults();
+}
+
+async function openSettingsModal() {
+  if (!elements.settingsModal || !elements.settingsForm) {
+    return;
+  }
+  openModal(elements.settingsModal);
+  try {
+    const payload = await api.fetchSettings();
+    const settings = payload?.data || {};
+    Object.entries(settings).forEach(([key, value]) => {
+      const field = elements.settingsForm.elements.namedItem(key);
+      if (field instanceof HTMLInputElement) {
+        field.value = String(value ?? "");
+      }
+    });
+  } catch (error) {
+    showToast(error.message, true);
+  }
+}
+
+async function saveSettings(event) {
+  event.preventDefault();
+  if (!elements.settingsForm) {
+    return;
+  }
+  const formData = new FormData(elements.settingsForm);
+  const payload = {
+    result_retention_per_task: Number(formData.get("result_retention_per_task")),
+    task_timeout: Number(formData.get("task_timeout")),
+    condition_timeout: Number(formData.get("condition_timeout")),
+    result_log_preview_limit: Number(formData.get("result_log_preview_limit")),
+  };
+  try {
+    const response = await api.updateSettings(payload);
+    const pruned = Number(response?.pruned || 0);
+    closeModal(elements.settingsModal);
+    if (pruned > 0) {
+      showToast(_t("msg.settings_saved_pruned", { n: pruned }));
+    } else {
+      showToast(_t("msg.settings_saved"));
+    }
+  } catch (error) {
+    showToast(error.message, true);
+  }
 }
 
 async function refreshResults() {
@@ -1433,6 +1527,7 @@ function renderResults(results) {
     elements.resultList.innerHTML = `<p class="empty">${_t('results.no_records')}</p>`;
     return;
   }
+  const fragment = document.createDocumentFragment();
   results.forEach((result) => {
     const status = statusMap[result.status] || {
       label: result.status,
@@ -1440,34 +1535,108 @@ function renderResults(results) {
     };
     const card = document.createElement("article");
     card.className = "result-card";
-    // translate status label and trigger reason (try trigger.<reason> then fallback)
     const statusText = _t(status.label);
     let reasonKey = `trigger.${result.trigger_reason}`;
     let reasonText = _t(reasonKey);
     if (reasonText === reasonKey) {
       reasonText = result.trigger_reason || "";
     }
-    card.innerHTML = `
-            <header>
-                <div>
-                    <div class="status-pill ${status.className}">${escapeHtml(statusText)}</div>
-                    <span class="muted">${_t('label.trigger')}${escapeHtml(reasonText)}</span>
-                </div>
-                  <div class="muted">${escapeHtml(formatDate(result.started_at))} - ${escapeHtml(formatDate(result.finished_at))}</div>
-                  <button class="ghost" data-delete="${result.id}">${_t('btn.delete')}</button>
-            </header>
-            <pre>${escapeHtml(result.log || "")}</pre>
-        `;
-    card.querySelector("[data-delete]").addEventListener("click", async () => {
+    const header = document.createElement("header");
+    const metaGroup = document.createElement("div");
+    const statusEl = document.createElement("div");
+    statusEl.className = `status-pill ${status.className}`;
+    statusEl.textContent = statusText;
+    const reasonEl = document.createElement("span");
+    reasonEl.className = "muted";
+    reasonEl.textContent = `${_t('label.trigger')}${reasonText}`;
+    metaGroup.appendChild(statusEl);
+    metaGroup.appendChild(reasonEl);
+
+    const actionsGroup = document.createElement("div");
+    actionsGroup.className = "result-card-actions";
+    const timeEl = document.createElement("div");
+    timeEl.className = "muted";
+    timeEl.textContent = `${formatDate(result.started_at)} - ${formatDate(result.finished_at)}`;
+    const deleteBtn = document.createElement("button");
+    deleteBtn.className = "ghost";
+    deleteBtn.type = "button";
+    deleteBtn.textContent = _t('btn.delete');
+    deleteBtn.addEventListener("click", async () => {
       try {
         await api.deleteResult(state.currentResultTaskId, result.id);
+        state.resultLogCache.delete(result.id);
         await refreshResults();
       } catch (error) {
         showToast(error.message, true);
       }
     });
-    elements.resultList.appendChild(card);
+    actionsGroup.appendChild(timeEl);
+    actionsGroup.appendChild(deleteBtn);
+    header.appendChild(metaGroup);
+    header.appendChild(actionsGroup);
+    card.appendChild(header);
+
+    const previewText =
+      typeof result.log_preview === "string"
+        ? result.log_preview
+        : (result.log || "");
+    const cachedFullLog = state.resultLogCache.get(result.id);
+    const isExpanded = typeof cachedFullLog === "string";
+    const logText = isExpanded ? cachedFullLog : previewText;
+
+    if (result.log_truncated || isExpanded) {
+      const logMeta = document.createElement("div");
+      logMeta.className = "result-log-meta";
+
+      const hint = document.createElement("span");
+      hint.className = "muted";
+      if (result.log_truncated) {
+        const previewLimit =
+          typeof result.log_preview === "string" ? result.log_preview.length : 0;
+        hint.textContent = _t("results.log_truncated", {
+          n: result.log_size || 0,
+          limit: previewLimit,
+        });
+      } else {
+        hint.textContent = _t("results.log_full");
+      }
+      logMeta.appendChild(hint);
+
+      const toggleBtn = document.createElement("button");
+      toggleBtn.className = "ghost small";
+      toggleBtn.type = "button";
+      toggleBtn.textContent = isExpanded ? _t("results.collapse_log") : _t("results.expand_log");
+      toggleBtn.addEventListener("click", async () => {
+        if (state.resultLogCache.has(result.id)) {
+          state.resultLogCache.delete(result.id);
+          renderResults(results);
+          return;
+        }
+        toggleBtn.disabled = true;
+        toggleBtn.textContent = _t("results.loading_log");
+        try {
+          const payload = await api.fetchResult(state.currentResultTaskId, result.id);
+          const fullLog = payload?.data?.log || "";
+          state.resultLogCache.set(result.id, fullLog);
+          renderResults(results);
+        } catch (error) {
+          showToast(error.message, true);
+          toggleBtn.disabled = false;
+          toggleBtn.textContent = _t("results.expand_log");
+        }
+      });
+      logMeta.appendChild(toggleBtn);
+      card.appendChild(logMeta);
+    }
+
+    const logEl = document.createElement("pre");
+    logEl.className = "result-log";
+    logEl.textContent = logText;
+    card.appendChild(logEl);
+
+    fragment.appendChild(card);
   });
+  elements.resultList.appendChild(fragment);
 }
 
 async function clearResultHistory() {
@@ -1477,6 +1646,7 @@ async function clearResultHistory() {
   }
   try {
     await api.clearResults(state.currentResultTaskId);
+    state.resultLogCache.clear();
     await refreshResults();
     showToast(_t('msg.results_cleared'));
   } catch (error) {
@@ -1526,7 +1696,7 @@ function attachEventListeners() {
   buttons.stop.addEventListener("click", stopSelectedTasks);
   buttons.toggle.addEventListener("click", toggleSelectedTask);
   buttons.results.addEventListener("click", openResultModal);
-  buttons.refresh.addEventListener("click", loadTasks);
+  buttons.settings?.addEventListener("click", openSettingsModal);
   buttons.clearResults.addEventListener("click", clearResultHistory);
   elements.clearPreTasksBtn.addEventListener("click", () => {
     Array.from(elements.preTaskSelect.options).forEach((option) => {
@@ -1559,6 +1729,7 @@ function attachEventListeners() {
   }
 
   elements.taskForm.addEventListener("submit", handleFormSubmit);
+  elements.settingsForm?.addEventListener("submit", saveSettings);
   document
     .querySelectorAll("[data-close]")
     .forEach((btn) => btn.addEventListener("click", closeModalOnOverlay));
@@ -1893,6 +2064,12 @@ setInterval(() => {
 }, 300);
 
 (async function init() {
+  document.querySelectorAll(".modal").forEach((modal) => {
+    if (modal.classList.contains("hidden")) {
+      modal.inert = true;
+      modal.setAttribute("aria-hidden", "true");
+    }
+  });
   await loadTemplates();
   attachEventListeners();
   toggleSections();

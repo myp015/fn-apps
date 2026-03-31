@@ -15,7 +15,7 @@ PYTHON_BIN="python3"
 #     # deactivate                                       # deactivate virtual environment
 # fi
 
-CMD="\"${PYTHON_BIN}\" \"${TRIM_APPDEST}/server/scheduler.py\" --unix-socket \"${TRIM_PKGVAR}/scheduler.sock\" --db \"${TRIM_PKGVAR}/scheduler.db\""
+CMD="\"${PYTHON_BIN}\" \"${TRIM_APPDEST}/server/scheduler.py\" --unix-socket \"${TRIM_PKGVAR}/scheduler.sock\" --db \"${TRIM_PKGVAR}/scheduler.db\" --settings \"${TRIM_PKGVAR}/scheduler.settings.json\""
 
 log_msg() {
   echo "$(date '+%Y-%m-%d %H:%M:%S') - $1" >>${LOG_FILE}

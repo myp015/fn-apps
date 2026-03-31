@@ -28,7 +28,7 @@
           <option value="en">English</option>
         </select>
       </div>
-      <button id="btnRefresh" class="ghost" data-i18n="btn.refresh">刷新</button>
+      <button id="btnSettings" class="ghost" data-i18n="btn.settings">设置</button>
     </div>
   </header>
 
@@ -189,6 +189,65 @@
         </div>
       </div>
       <div class="result-list" id="resultList"></div>
+    </div>
+  </div>
+
+  <div id="settingsModal" class="modal hidden" role="dialog" aria-modal="true">
+    <div class="modal-content">
+      <div class="modal-header">
+        <div>
+          <h2 data-i18n="modal.settings.title">运行设置</h2>
+          <p class="subtitle" data-i18n="modal.settings.subtitle">调整结果保留与执行超时等全局参数</p>
+        </div>
+        <button class="ghost" data-close>&times;</button>
+      </div>
+      <form id="settingsForm">
+        <div class="settings-groups">
+          <section class="settings-group" aria-labelledby="settingsResultsTitle">
+            <div class="settings-group-header">
+              <h3 id="settingsResultsTitle" data-i18n="settings.group.results.title">结果与日志</h3>
+              <p data-i18n="settings.group.results.subtitle">控制执行记录保留数量，以及结果列表默认显示多少日志内容。</p>
+            </div>
+            <div class="form-grid">
+              <label>
+                <span data-i18n="field.settings.result_retention">结果保留条数</span>
+                <input type="number" name="result_retention_per_task" min="0" step="1" required />
+                <small data-i18n="field.settings.result_retention_hint">每个任务最多保留多少条已完成结果，0 表示不限制。</small>
+              </label>
+              <label>
+                <span data-i18n="field.settings.result_preview_limit">结果预览长度</span>
+                <input type="number" name="result_log_preview_limit" min="256" step="1" required />
+                <small data-i18n="field.settings.result_preview_limit_hint">前端结果列表默认展示的日志摘要长度，最小 256 字符。</small>
+              </label>
+            </div>
+          </section>
+          <section class="settings-group" aria-labelledby="settingsExecutionTitle">
+            <div class="settings-group-header">
+              <h3 id="settingsExecutionTitle" data-i18n="settings.group.execution.title">执行与超时</h3>
+              <p data-i18n="settings.group.execution.subtitle">控制任务脚本和条件脚本的最长执行时间，避免任务长时间卡住。</p>
+            </div>
+            <div class="form-grid">
+              <label>
+                <span data-i18n="field.settings.task_timeout">任务超时时间（秒）</span>
+                <input type="number" name="task_timeout" min="0" step="1" required />
+                <small data-i18n="field.settings.task_timeout_hint">脚本执行超过该时间会被终止，0 表示不限制。</small>
+              </label>
+              <label>
+                <span data-i18n="field.settings.condition_timeout">条件脚本超时（秒）</span>
+                <input type="number" name="condition_timeout" min="1" step="1" required />
+                <small data-i18n="field.settings.condition_timeout_hint">事件触发里的条件脚本检测超时，最小 1 秒。</small>
+              </label>
+            </div>
+          </section>
+        </div>
+        <div class="modal-actions">
+          <div></div>
+          <div>
+            <button type="button" class="ghost" data-close data-i18n="btn.cancel">取消</button>
+            <button type="submit" class="primary" data-i18n="btn.save">保存</button>
+          </div>
+        </div>
+      </form>
     </div>
   </div>
 
