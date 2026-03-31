@@ -57,8 +57,6 @@ for a in "${ARCH[@]}"; do
   }
 done
 
-echo "Done"
-
 APPNAME=$(grep -w '^appname' "${WORKDIR}/manifest" | awk -F= '{print $2}' | xargs)
 VERSION=$(grep -w '^version' "${WORKDIR}/manifest" | awk -F= '{print $2}' | xargs)
 PLATFORM=$(grep -w '^platform' "${WORKDIR}/manifest" | awk -F= '{print $2}' | xargs)
@@ -78,4 +76,5 @@ tar -czf "$(dirname "${WORKDIR}")/${APPNAME}_${PLATFORM}_v${VERSION}.fpk" -C "${
 
 rm -f "${WORKDIR}/app.tgz"
 
+echo "Done"
 exit 0
