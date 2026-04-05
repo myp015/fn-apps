@@ -1,8 +1,11 @@
 const state = {
   tasks: [],
   selectedIds: new Set(),
+  sort: {
+    key: "latest_status",
+    direction: "asc",
+  },
   editingTaskId: null,
-  editingTaskName: '', // 添加这个字段
   currentResultTaskId: null,
   resultLogCache: new Map(),
   accounts: [],
@@ -36,10 +39,12 @@ function mapApiErrorMessage(raw) {
 }
 
 const AUTO_REFRESH_INTERVAL = 5000; // 5 seconds
+const DEFAULT_SCHEDULE_EXPRESSION = "0 0 * * *";
 let autoRefreshTimer = null;
 let loadTasksPromise = null;
 
 const elements = {
+  tableHead: document.querySelector("#taskTable thead"),
   tableBody: document.querySelector("#taskTable tbody"),
   emptyState: document.getElementById("emptyState"),
   taskModal: document.getElementById("taskModal"),
@@ -69,7 +74,6 @@ const elements = {
   cronPreview: document.getElementById("cronPreview"),
   cronNextTimes: document.getElementById("cronNextTimes"),
   scheduleInput: document.querySelector('input[name="schedule_expression"]'),
-  currentTime: document.getElementById("currentTime"),
 };
 
 // 计算 API 基础路径：优先使用模块位置（支持通过 index.cgi 加载的情况），
@@ -103,34 +107,29 @@ const API_BASE = (function () {
 
 let taskTemplates = {};
 
+function buildTemplateLookup(templates) {
+  const lookup = {};
+  if (!Array.isArray(templates)) {
+    return lookup;
+  }
+
+  templates.forEach((template) => {
+    if (template && template.key) {
+      lookup[template.key] = template;
+    }
+  });
+
+  return lookup;
+}
+
 async function loadTemplates() {
   try {
-    // 从后端获取数据库中的模板
-    const resp = await fetch('api/templates');
-    if (!resp.ok) throw new Error(_t('error.load_templates', { status: resp.status }));
-    const payload = await resp.json();
-    // payload.data 为数组形式
-    taskTemplates = {};
-    if (payload && Array.isArray(payload.data)) {
-      payload.data.forEach((t) => {
-        if (t && t.key) {
-          taskTemplates[t.key] = t;
-        }
-      });
-    } else if (payload && typeof payload === 'object') {
-      // 兼容 /api/templates/export 或直接返回 mapping
-      if (!Array.isArray(payload)) {
-        Object.keys(payload).forEach((k) => {
-          const v = payload[k];
-          taskTemplates[k] = { key: k, name: v.name, script_body: v.script_body };
-        });
-      }
-    }
+    const payload = await api.listTemplates();
+    taskTemplates = buildTemplateLookup(payload?.data);
     renderTemplateOptions();
-    console.info('任务模板已加载', Object.keys(taskTemplates));
   } catch (err) {
-    console.warn('无法通过 API 加载模板', err);
     taskTemplates = {};
+    renderTemplateOptions();
   }
 }
 
@@ -162,6 +161,16 @@ const templatesState = {
   editingId: null,
 };
 
+function updateTemplateActionState() {
+  const hasSelection = Boolean(templatesState.selectedId);
+  const editButton = document.getElementById('btnEditTemplate');
+  const deleteButton = document.getElementById('btnDeleteTemplate');
+  const previewButton = document.getElementById('btnPreviewTemplate');
+  if (editButton) editButton.disabled = !hasSelection;
+  if (deleteButton) deleteButton.disabled = !hasSelection;
+  if (previewButton) previewButton.disabled = !hasSelection;
+}
+
 async function refreshTemplatesList() {
   try {
     const resp = await api.listTemplates();
@@ -178,7 +187,10 @@ async function refreshTemplatesList() {
 
 function renderTemplatesTable() {
   const tbody = document.querySelector('#templatesTable tbody');
-  if (!tbody) return;
+  if (!tbody) {
+    updateTemplateActionState();
+    return;
+  }
   tbody.innerHTML = '';
   templatesState.templates.forEach((t) => {
     const tr = document.createElement('tr');
@@ -239,6 +251,7 @@ function renderTemplatesTable() {
     const selRow = document.querySelector(`#templatesTable tbody tr[data-id="${templatesState.selectedId}"]`);
     if (selRow) selRow.focus();
   }
+  updateTemplateActionState();
 }
 
 function openTemplatesModal() {
@@ -337,21 +350,95 @@ function bindTemplateImportFile() {
   };
 }
 
-// 显示当前时间
-function updateCurrentTime() {
-  if (!elements.currentTime) { return; }
-  const now = new Date();
-  const y = now.getFullYear();
-  const m = String(now.getMonth() + 1).padStart(2, "0");
-  const d = String(now.getDate()).padStart(2, "0");
-  const h = String(now.getHours()).padStart(2, "0");
-  const min = String(now.getMinutes()).padStart(2, "0");
-  const s = String(now.getSeconds()).padStart(2, "0");
-  elements.currentTime.textContent = `${y}-${m}-${d} ${h}:${min}:${s}`;
+function bindTaskTemplateSelection() {
+  const templateSelect = document.getElementById('templateSelect');
+  if (!templateSelect) {
+    return;
+  }
+
+  templateSelect.addEventListener('change', function () {
+    const templateKey = this.value;
+    if (templateKey && taskTemplates[templateKey]) {
+      const template = taskTemplates[templateKey];
+      elements.taskForm.script_body.value = template.script_body;
+      showToast(_t('msg.template_applied', { name: template.name }));
+    }
+  });
 }
 
-setInterval(updateCurrentTime, 1000);
-updateCurrentTime();
+function bindTemplateManagementEventListeners() {
+  const manageButton = document.getElementById('btnManageTemplates');
+  if (manageButton) {
+    manageButton.addEventListener('click', openTemplatesModal);
+  }
+
+  const addTemplateButton = document.getElementById('btnAddTemplate');
+  if (addTemplateButton) {
+    addTemplateButton.addEventListener('click', () => openTemplateEditModal(null));
+  }
+
+  const editTemplateButton = document.getElementById('btnEditTemplate');
+  if (editTemplateButton) {
+    editTemplateButton.addEventListener('click', () => {
+      const id = templatesState.selectedId;
+      if (!id) {
+        showToast(_t('prompt.select_template_to_edit'));
+        return;
+      }
+      const template = templatesState.templates.find((item) => Number(item.id) === Number(id));
+      if (!template) {
+        showToast(_t('error.template_not_found'));
+        return;
+      }
+      openTemplateEditModal(template);
+    });
+  }
+
+  const deleteTemplateButton = document.getElementById('btnDeleteTemplate');
+  if (deleteTemplateButton) {
+    deleteTemplateButton.addEventListener('click', deleteSelectedTemplate);
+  }
+
+  const exportTemplatesButton = document.getElementById('btnExportTemplates');
+  if (exportTemplatesButton) {
+    exportTemplatesButton.addEventListener('click', async () => {
+      const mapping = await api.exportTemplates();
+      const content = JSON.stringify(mapping, null, 2);
+      openServerFilePicker('/', { mode: 'save', content });
+    });
+  }
+
+  const importTemplatesButton = document.getElementById('btnImportTemplates');
+  if (importTemplatesButton) {
+    importTemplatesButton.addEventListener('click', () => {
+      openServerFilePicker('/');
+    });
+  }
+
+  const previewTemplateButton = document.getElementById('btnPreviewTemplate');
+  if (previewTemplateButton) {
+    previewTemplateButton.addEventListener('click', () => {
+      const id = templatesState.selectedId;
+      if (!id) {
+        showToast(_t('prompt.select_template_to_preview'));
+        return;
+      }
+      const template = templatesState.templates.find((item) => Number(item.id) === Number(id));
+      if (!template) {
+        showToast(_t('error.template_not_found'));
+        return;
+      }
+      openTemplatePreview(template);
+    });
+  }
+
+  const templateForm = document.getElementById('templateForm');
+  if (templateForm) {
+    templateForm.addEventListener('submit', saveTemplateFromForm);
+  }
+
+  bindTemplateImportFile();
+}
 
 const buttons = {
   create: document.getElementById("btnCreate"),
@@ -379,10 +466,132 @@ CRON_FIELDS.forEach((field) => {
 });
 
 const statusMap = {
+  running: { label: 'status.running', className: "status-running" },
   success: { label: 'status.success', className: "status-success" },
   failed: { label: 'status.failed', className: "status-failed" },
-  running: { label: 'status.running', className: "status-running" },
+  condition_failed: { label: 'status.condition_failed', className: "status-condition-failed" },
+  pretask_failed: { label: 'status.pretask_failed', className: "status-pretask-failed" },
 };
+
+const taskStatusPriority = {
+  running: 0,
+  success: 1,
+  failed: 2,
+  condition_failed: 3,
+  pretask_failed: 4,
+};
+
+const SORT_DIRECTIONS = {
+  asc: "ascending",
+  desc: "descending",
+};
+
+function getTaskSortPriority(task) {
+  const status = task?.latest_result?.status || "";
+  if (Object.prototype.hasOwnProperty.call(taskStatusPriority, status)) {
+    return taskStatusPriority[status];
+  }
+  return 5;
+}
+
+function getTaskTriggerLabel(task) {
+  let triggerLabel = _t(triggerMap[task.trigger_type] || task.trigger_type || "");
+  if (task.trigger_type === "event") {
+    const subtype = getEventLabel(task.event_type) || _t('trigger.event');
+    triggerLabel = `${triggerLabel} · ${subtype}`;
+  }
+  return triggerLabel;
+}
+
+function getTaskSortValue(task, key) {
+  switch (key) {
+    case "enabled":
+      return task.is_active ? 0 : 1;
+    case "name":
+      return String(task.name || "");
+    case "next_run": {
+      const value = task.next_run_at ? Date.parse(task.next_run_at) : Number.NaN;
+      return Number.isFinite(value) ? value : null;
+    }
+    case "trigger":
+      return getTaskTriggerLabel(task);
+    case "latest_status":
+      return getTaskSortPriority(task);
+    case "account":
+      return String(task.account || "");
+    default:
+      return null;
+  }
+}
+
+function compareTaskSortValues(left, right, direction) {
+  const leftMissing = left == null;
+  const rightMissing = right == null;
+  if (leftMissing || rightMissing) {
+    if (leftMissing && rightMissing) {
+      return 0;
+    }
+    return leftMissing ? 1 : -1;
+  }
+  if (typeof left === "string" || typeof right === "string") {
+    const result = String(left).localeCompare(String(right), "zh-CN", {
+      numeric: true,
+      sensitivity: "base",
+    });
+    return direction === "desc" ? -result : result;
+  }
+  if (left === right) {
+    return 0;
+  }
+  if (direction === "desc") {
+    return left > right ? -1 : 1;
+  }
+  return left > right ? 1 : -1;
+}
+
+function sortTasks() {
+  const { key, direction } = state.sort;
+  state.tasks.sort((leftTask, rightTask) => {
+    const valueDiff = compareTaskSortValues(
+      getTaskSortValue(leftTask, key),
+      getTaskSortValue(rightTask, key),
+      direction,
+    );
+    if (valueDiff !== 0) {
+      return valueDiff;
+    }
+    return leftTask.id - rightTask.id;
+  });
+}
+
+function updateSortHeaders() {
+  if (!elements.tableHead) {
+    return;
+  }
+  elements.tableHead.querySelectorAll("th[data-sort-key]").forEach((header) => {
+    const key = header.dataset.sortKey;
+    if (key === state.sort.key) {
+      header.setAttribute("aria-sort", SORT_DIRECTIONS[state.sort.direction] || "none");
+      return;
+    }
+    header.setAttribute("aria-sort", "none");
+  });
+}
+
+function toggleTaskSort(sortKey) {
+  if (!sortKey) {
+    return;
+  }
+  if (state.sort.key === sortKey) {
+    state.sort.direction = state.sort.direction === "asc" ? "desc" : "asc";
+  } else {
+    state.sort.key = sortKey;
+    state.sort.direction = "asc";
+  }
+  sortTasks();
+  updateSortHeaders();
+  renderTasks();
+}
 
 const triggerMap = {
   schedule: 'trigger.schedule',
@@ -409,6 +618,27 @@ function isNarrow() {
 function getEventLabel(key) {
   if (isNarrow()) return _t(eventTypeShortMap[key] || eventTypeMap[key] || key);
   return _t(eventTypeMap[key] || key);
+}
+
+function updateEventTypeOptionLabels() {
+  const select = elements.eventTypeSelect;
+  if (!select) {
+    return;
+  }
+  const useShortLabel = isNarrow();
+  for (const option of select.options) {
+    const value = option.value;
+    if (value === 'script' || value === 'system_boot' || value === 'system_shutdown') {
+      option.textContent = useShortLabel
+        ? _t(eventTypeShortMap[value] || eventTypeMap[value] || value)
+        : _t(eventTypeMap[value] || eventTypeShortMap[value] || value);
+    }
+  }
+}
+
+function handleViewportChange() {
+  updateEventTypeOptionLabels();
+  renderTasks();
 }
 
 function escapeHtml(value = "") {
@@ -584,13 +814,10 @@ function renderTasks() {
     const statusLabel = _t(status.label);
     const safeName = escapeHtml(task.name);
     const safeAccount = escapeHtml(task.account);
-    let triggerLabel = _t(triggerMap[task.trigger_type] || task.trigger_type);
+    let triggerLabel = getTaskTriggerLabel(task);
     if (task.trigger_type === "event") {
-      const subtype = getEventLabel(task.event_type) || _t('trigger.event');
       if (isNarrow()) {
-        triggerLabel = subtype;
-      } else {
-        triggerLabel = `${triggerLabel} · ${subtype}`;
+        triggerLabel = getEventLabel(task.event_type) || _t('trigger.event');
       }
     }
 
@@ -646,8 +873,8 @@ function showConfirm(message, { okText = _t('btn.ok'), cancelText = _t('btn.canc
             <div><h2></h2></div>
             <div class="modal-header-actions"><button class="ghost" data-close>&times;</button></div>
           </div>
-          <div class="modal-body" style="padding:1rem;"></div>
-          <div class="modal-actions" style="display:flex;justify-content:flex-end;gap:0.5rem;padding:1rem;">
+          <div class="modal-body confirm-modal-body"></div>
+          <div class="modal-actions confirm-modal-actions">
             <button class="ghost" id="__confirmCancel"></button>
             <button class="primary" id="__confirmOk"></button>
           </div>
@@ -808,21 +1035,21 @@ function renderAccountOptions(selectedAccount = "") {
     select.appendChild(option);
     select.disabled = true;
     if (statusEl) {
-      statusEl.textContent = defaultAccount ? "" : "";
+      statusEl.textContent = "";
     }
     return;
   }
 
   select.disabled = false;
   let hasSelected = false;
-  const legacyAccount =
+  const unavailableSelectedAccount =
     selectedAccount && !state.accounts.includes(selectedAccount)
       ? selectedAccount
       : "";
-  if (legacyAccount) {
+  if (unavailableSelectedAccount) {
     const placeholder = document.createElement("option");
     placeholder.value = "";
-    placeholder.textContent = `${legacyAccount} ${_t('placeholder.needs_reselect')}`;
+    placeholder.textContent = `${unavailableSelectedAccount} ${_t('placeholder.needs_reselect')}`;
     placeholder.disabled = true;
     placeholder.selected = true;
     select.appendChild(placeholder);
@@ -839,39 +1066,13 @@ function renderAccountOptions(selectedAccount = "") {
     select.appendChild(option);
   });
 
-
-  // 更新事件类型下拉选项的显示文本（响应式）
-  function updateEventOptionLabels() {
-    const el = elements.eventTypeSelect;
-    if (!el) return;
-    const useShort = isNarrow();
-    // 保留选项顺序及 value，仅调整显示文本
-    for (const opt of el.options) {
-      const v = opt.value;
-      if (v === 'script' || v === 'system_boot' || v === 'system_shutdown') {
-        opt.textContent = useShort ? _t(eventTypeShortMap[v] || eventTypeMap[v]) : _t(eventTypeMap[v] || eventTypeShortMap[v]);
-      }
-    }
-  }
-
-  // 在窗口尺寸变化时更新 event 下拉与任务列表显示
-  window.addEventListener('resize', () => {
-    updateEventOptionLabels();
-    // 重新渲染任务以更新在表格中显示的事件简称/全称
-    renderTasks();
-  });
-
-  // 初始化时也更新一下
-  document.addEventListener('DOMContentLoaded', () => {
-    updateEventOptionLabels();
-  });
-  if (!hasSelected && !legacyAccount && select.options.length) {
+  if (!hasSelected && !unavailableSelectedAccount && select.options.length) {
     select.options[0].selected = true;
   }
 
   if (statusEl) {
-    statusEl.textContent = legacyAccount
-      ? _t('error.task_account_not_allowed', { acc: legacyAccount })
+    statusEl.textContent = unavailableSelectedAccount
+      ? _t('error.task_account_not_allowed', { acc: unavailableSelectedAccount })
       : "";
   }
 }
@@ -963,14 +1164,6 @@ function openTaskModal(task = null) {
     templateSelect.value = '';
   }
 
-  // 记录原始任务名称（用于判断是否已修改）
-  if (task) {
-    state.editingTaskName = task.name;
-    elements.taskForm.name.value = task.name;
-  } else {
-    state.editingTaskName = '';
-  }
-
   const preferredAccount = task?.account || "";
   renderAccountOptions(preferredAccount);
   if (!state.accountLoading && !state.accounts.length) {
@@ -994,7 +1187,7 @@ function openTaskModal(task = null) {
     elements.eventTypeSelect.value = "system_shutdown";
     elements.taskForm.condition_interval.value = 60;
     if (elements.scheduleInput) {
-      elements.scheduleInput.value = "";
+      elements.scheduleInput.value = DEFAULT_SCHEDULE_EXPRESSION;
     }
   }
   toggleSections();
@@ -1308,7 +1501,7 @@ async function loadTasks({ silent = false } = {}) {
     try {
       const { data } = await api.listTasks();
       state.tasks = data || [];
-      state.tasks.sort((a, b) => a.id - b.id);
+      sortTasks();
       state.selectedIds.forEach((id) => {
         if (!state.tasks.some((task) => task.id === id)) {
           state.selectedIds.delete(id);
@@ -1374,15 +1567,23 @@ async function runSelectedTasks() {
   try {
     const response = await api.batchTasks("run", selected);
     const result = response.result || {};
-    const { queued = [], running = [], blocked = [], missing = [] } = result;
+    const {
+      queued = [],
+      running = [],
+      pretask_failed = [],
+      condition_failed = [],
+      missing = [],
+    } = result;
     const queuedCount = queued.length;
     const runningCount = running.length;
-    const blockedCount = blocked.length;
+    const pretaskFailedCount = pretask_failed.length;
+    const conditionFailedCount = condition_failed.length;
     const missingCount = missing.length;
     const parts = [];
     if (queuedCount) parts.push(_t('msg.triggered_n', { n: queuedCount }));
     if (runningCount) parts.push(_t('msg.running_n', { n: runningCount }));
-    if (blockedCount) parts.push(_t('msg.blocked_n', { n: blockedCount }));
+    if (pretaskFailedCount) parts.push(_t('msg.pretask_failed_n', { n: pretaskFailedCount }));
+    if (conditionFailedCount) parts.push(_t('msg.condition_failed_n', { n: conditionFailedCount }));
     if (missingCount) parts.push(_t('msg.missing_n', { n: missingCount }));
     showToast(parts.join(_t('list.sep')) || _t('msg.no_tasks_triggered'));
   } catch (error) {
@@ -1664,7 +1865,28 @@ function closeModalOnOverlay(event) {
   }
 }
 
-function attachEventListeners() {
+function bindTaskTableEventListeners() {
+  if (elements.tableHead) {
+    elements.tableHead.addEventListener("click", (event) => {
+      const header = event.target.closest("th[data-sort-key]");
+      if (!header) {
+        return;
+      }
+      toggleTaskSort(header.dataset.sortKey || "");
+    });
+    elements.tableHead.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter" && event.key !== " ") {
+        return;
+      }
+      const header = event.target.closest("th[data-sort-key]");
+      if (!header) {
+        return;
+      }
+      event.preventDefault();
+      toggleTaskSort(header.dataset.sortKey || "");
+    });
+  }
+
   elements.tableBody.addEventListener("click", (event) => {
     const row = event.target.closest("tr");
     if (!row) { return; }
@@ -1681,7 +1903,9 @@ function attachEventListeners() {
     }
     renderTasks();
   });
+}
 
+function bindTaskActionEventListeners() {
   buttons.create.addEventListener("click", () => openTaskModal());
   buttons.edit.addEventListener("click", () => {
     const selected = getSelectedTasks();
@@ -1698,6 +1922,7 @@ function attachEventListeners() {
   buttons.results.addEventListener("click", openResultModal);
   buttons.settings?.addEventListener("click", openSettingsModal);
   buttons.clearResults.addEventListener("click", clearResultHistory);
+
   elements.clearPreTasksBtn.addEventListener("click", () => {
     Array.from(elements.preTaskSelect.options).forEach((option) => {
       option.selected = false;
@@ -1727,7 +1952,9 @@ function attachEventListeners() {
       loadAccounts({ showError: true }),
     );
   }
+}
 
+function bindFormAndModalEventListeners() {
   elements.taskForm.addEventListener("submit", handleFormSubmit);
   elements.settingsForm?.addEventListener("submit", saveSettings);
   document
@@ -1743,7 +1970,9 @@ function attachEventListeners() {
 
   elements.triggerTypeSelect.addEventListener("change", toggleSections);
   elements.eventTypeSelect.addEventListener("change", toggleEventInputs);
+}
 
+function bindCronGeneratorEventListeners() {
   CRON_FIELDS.forEach((field) => {
     const select = cronSelects[field];
     const input = cronCustomInputs[field];
@@ -1794,60 +2023,18 @@ function attachEventListeners() {
       closeModal(elements.cronModal);
     }
   });
-
-  // 添加模板选择事件监听器
-  const templateSelect = document.getElementById('templateSelect');
-  if (templateSelect) {
-    templateSelect.addEventListener('change', function () {
-      const templateKey = this.value;
-      if (templateKey && taskTemplates[templateKey]) {
-        const template = taskTemplates[templateKey];
-        // 仅替换任务内容，不修改名称、触发方式或其它字段
-        elements.taskForm.script_body.value = template.script_body;
-        showToast(_t('msg.template_applied', { name: template.name }));
-      } else {
-        // 选择“无模板（自定义）”时不做其它自动清理，仅保留当前用户输入
-      }
-    });
-  }
 }
-// 模板管理按钮与操作
-const manageBtn = document.getElementById('btnManageTemplates');
-if (manageBtn) manageBtn.addEventListener('click', openTemplatesModal);
-const addTplBtn = document.getElementById('btnAddTemplate');
-if (addTplBtn) addTplBtn.addEventListener('click', () => openTemplateEditModal(null));
-const editTplBtn = document.getElementById('btnEditTemplate');
-if (editTplBtn) editTplBtn.addEventListener('click', () => {
-  const id = templatesState.selectedId;
-  if (!id) { showToast(_t('prompt.select_template_to_edit')); return; }
-  const tpl = templatesState.templates.find(t => Number(t.id) === Number(id));
-  if (!tpl) { showToast(_t('error.template_not_found')); return; }
-  openTemplateEditModal(tpl);
-});
-const delTplBtn = document.getElementById('btnDeleteTemplate');
-if (delTplBtn) delTplBtn.addEventListener('click', deleteSelectedTemplate);
-const expTplBtn = document.getElementById('btnExportTemplates');
-if (expTplBtn) expTplBtn.addEventListener('click', async () => {
-  const mapping = await api.exportTemplates();
-  const content = JSON.stringify(mapping, null, 2);
-  // directly open server file picker in save mode (no confirmation)
-  openServerFilePicker('/', { mode: 'save', content });
-});
-const impTplBtn = document.getElementById('btnImportTemplates');
-if (impTplBtn) impTplBtn.addEventListener('click', () => {
-  openServerFilePicker('/');
-});
-const previewBtn = document.getElementById('btnPreviewTemplate');
-if (previewBtn) previewBtn.addEventListener('click', () => {
-  const id = templatesState.selectedId;
-  if (!id) { showToast(_t('prompt.select_template_to_preview')); return; }
-  const tpl = templatesState.templates.find(t => Number(t.id) === Number(id));
-  if (!tpl) { showToast(_t('error.template_not_found')); return; }
-  openTemplatePreview(tpl);
-});
-const tplForm = document.getElementById('templateForm');
-if (tplForm) tplForm.addEventListener('submit', saveTemplateFromForm);
-bindTemplateImportFile();
+
+function attachEventListeners() {
+  window.addEventListener("resize", handleViewportChange);
+  bindTaskTableEventListeners();
+  bindTaskActionEventListeners();
+  bindFormAndModalEventListeners();
+  bindCronGeneratorEventListeners();
+
+  bindTaskTemplateSelection();
+  bindTemplateManagementEventListeners();
+}
 // 服务器文件选择：浏览并读取服务器端文件（依赖后端 api/fs 列表与读取接口）
 function openServerFilePicker(defaultPath = '/', options = {}) {
   const mode = options.mode || 'open'; // 'open' or 'save'
@@ -2052,17 +2239,6 @@ function renderServerFileList(files, parentPath) {
     listEl.innerHTML = '<div class="muted">' + escapeHtml(e && e.message ? e.message : String(e)) + '</div>';
   }
 }
-// update buttons state periodically
-setInterval(() => {
-  const editBtn = document.getElementById('btnEditTemplate');
-  const delBtn = document.getElementById('btnDeleteTemplate');
-  const previewBtn2 = document.getElementById('btnPreviewTemplate');
-  const sel = templatesState.selectedId;
-  if (editBtn) editBtn.disabled = !sel;
-  if (delBtn) delBtn.disabled = !sel;
-  if (previewBtn2) previewBtn2.disabled = !sel;
-}, 300);
-
 (async function init() {
   document.querySelectorAll(".modal").forEach((modal) => {
     if (modal.classList.contains("hidden")) {
@@ -2072,7 +2248,10 @@ setInterval(() => {
   });
   await loadTemplates();
   attachEventListeners();
+  updateSortHeaders();
   toggleSections();
+  updateEventTypeOptionLabels();
+  updateTemplateActionState();
   await loadAccounts({ showError: false });
   await loadTasks();
   startAutoRefresh();

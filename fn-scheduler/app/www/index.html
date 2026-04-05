@@ -49,12 +49,30 @@
         <table id="taskTable">
           <thead>
             <tr>
-              <th data-i18n="table.enabled">是否启动</th>
-              <th data-i18n="table.name">任务名称</th>
-              <th data-i18n="table.next_run">下次运行时间</th>
-              <th data-i18n="table.trigger">触发类型</th>
-              <th data-i18n="table.latest_status">最新状态</th>
-              <th data-i18n="table.account">账号</th>
+              <th class="sortable-header" data-sort-key="enabled" tabindex="0" role="button" aria-sort="none">
+                <span class="sort-label" data-i18n="table.enabled">是否启动</span>
+                <span class="sort-indicator" aria-hidden="true"></span>
+              </th>
+              <th class="sortable-header" data-sort-key="name" tabindex="0" role="button" aria-sort="none">
+                <span class="sort-label" data-i18n="table.name">任务名称</span>
+                <span class="sort-indicator" aria-hidden="true"></span>
+              </th>
+              <th class="sortable-header" data-sort-key="next_run" tabindex="0" role="button" aria-sort="none">
+                <span class="sort-label" data-i18n="table.next_run">下次运行时间</span>
+                <span class="sort-indicator" aria-hidden="true"></span>
+              </th>
+              <th class="sortable-header" data-sort-key="trigger" tabindex="0" role="button" aria-sort="none">
+                <span class="sort-label" data-i18n="table.trigger">触发类型</span>
+                <span class="sort-indicator" aria-hidden="true"></span>
+              </th>
+              <th class="sortable-header" data-sort-key="latest_status" tabindex="0" role="button" aria-sort="none">
+                <span class="sort-label" data-i18n="table.latest_status">最新状态</span>
+                <span class="sort-indicator" aria-hidden="true"></span>
+              </th>
+              <th class="sortable-header" data-sort-key="account" tabindex="0" role="button" aria-sort="none">
+                <span class="sort-label" data-i18n="table.account">账号</span>
+                <span class="sort-indicator" aria-hidden="true"></span>
+              </th>
             </tr>
           </thead>
           <tbody></tbody>
@@ -233,9 +251,9 @@
                 <small data-i18n="field.settings.task_timeout_hint">脚本执行超过该时间会被终止，0 表示不限制。</small>
               </label>
               <label>
-                <span data-i18n="field.settings.condition_timeout">条件脚本超时（秒）</span>
+                <span data-i18n="field.settings.condition_timeout">条件脚本超时时间（秒）</span>
                 <input type="number" name="condition_timeout" min="1" step="1" required />
-                <small data-i18n="field.settings.condition_timeout_hint">事件触发里的条件脚本检测超时，最小 1 秒。</small>
+                <small data-i18n="field.settings.condition_timeout_hint">条件脚本执行超过该时间会被终止，最小 1 秒。</small>
               </label>
             </div>
           </section>

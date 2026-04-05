@@ -112,7 +112,6 @@ main {
   z-index: 50;
 }
 
-.btn-theme,
 .theme-select,
 .lang-select {
   color: var(--fg);
@@ -301,6 +300,50 @@ button.ghost.selected {
   letter-spacing: 0.05em;
 }
 
+#taskTable th.sortable-header {
+  cursor: pointer;
+  user-select: none;
+}
+
+#taskTable th.sortable-header:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: -2px;
+}
+
+#taskTable th.sortable-header:hover {
+  background: rgba(59, 130, 246, 0.06);
+}
+
+.sort-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.sort-indicator {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 14px;
+  margin-left: 6px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+#taskTable th[aria-sort="ascending"] .sort-indicator::before {
+  content: "▲";
+  color: var(--primary);
+}
+
+#taskTable th[aria-sort="descending"] .sort-indicator::before {
+  content: "▼";
+  color: var(--primary);
+}
+
+#taskTable th[aria-sort="none"] .sort-indicator::before {
+  content: "↕";
+}
+
 #taskTable td {
   padding: 16px;
   border-bottom: 1px solid var(--border);
@@ -334,6 +377,11 @@ button.ghost.selected {
   letter-spacing: 0.05em;
 }
 
+.status-pretask-failed {
+  background: #fde68a;
+  color: #92400e;
+}
+
 .status-success {
   background: #d1fae5;
   color: #065f46;
@@ -347,6 +395,11 @@ button.ghost.selected {
 .status-running {
   background: #dbeafe;
   color: #1e40af;
+}
+
+.status-condition-failed {
+  background: #fef3c7;
+  color: #92400e;
 }
 
 .status-unknown {
@@ -476,6 +529,10 @@ button.ghost.selected {
   grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
   margin-bottom: 0;
   gap: 8px;
+}
+
+.form-grid-single {
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .settings-groups {
@@ -665,6 +722,16 @@ small {
   margin-top: 16px;
   padding-top: 12px;
   border-top: 1px solid var(--border);
+}
+
+.confirm-modal-body {
+  padding: 1rem;
+}
+
+.confirm-modal-actions {
+  gap: 0.5rem;
+  padding: 1rem;
+  margin-top: 0;
 }
 
 /* 包装器样式 */

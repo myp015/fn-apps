@@ -47,6 +47,9 @@ TASK_TIMEOUT = int(os.environ.get("SCHEDULER_TASK_TIMEOUT", "900"))
 CONDITION_TIMEOUT = int(os.environ.get("SCHEDULER_CONDITION_TIMEOUT", "60"))
 MAX_LOOKAHEAD_MINUTES = 60 * 24 * 366  # one leap year
 RESULT_LOG_PREVIEW_LIMIT = int(os.environ.get("SCHEDULER_RESULT_LOG_PREVIEW_LIMIT", "4000"))
+CONDITION_LOG_PREVIEW_LIMIT = int(
+    os.environ.get("SCHEDULER_CONDITION_LOG_PREVIEW_LIMIT", "240")
+)
 RESULT_RETENTION_PER_TASK = int(
     os.environ.get("SCHEDULER_RESULT_RETENTION_PER_TASK", "200")
 )
@@ -97,6 +100,32 @@ def strip_wrapping_quotes(value: Optional[str]) -> Optional[str]:
     if len(trimmed) >= 2 and trimmed[0] == trimmed[-1] and trimmed[0] in {'"', "'"}:
         return trimmed[1:-1]
     return trimmed
+
+
+def parse_bool_value(value: Any, default: bool = False) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "off", ""}:
+            return False
+    return bool(value)
+
+
+def summarize_log_text(text: Optional[str], limit: int = CONDITION_LOG_PREVIEW_LIMIT) -> str:
+    normalized = str(text or "").strip().replace("\r\n", "\n").replace("\r", "\n")
+    if not normalized:
+        return ""
+    single_line = normalized.replace("\n", "\\n")
+    if limit >= 0 and len(single_line) > limit:
+        return f"{single_line[:limit]}..."
+    return single_line
 
 
 def serialize_result_row(
@@ -298,6 +327,69 @@ def ensure_account_allowed(account: str) -> str:
     if account not in allowed:
         raise ValueError("account must belong to system groups 0/1000/1001")
     return account
+
+
+def prepare_task_account_context(
+    task: Dict[str, Any],
+) -> tuple[Optional[Callable[[], None]], Optional[str]]:
+    if not POSIX_ACCOUNT_SUPPORT:
+        return (None, None)
+    account = task.get("account")
+    if not account:
+        return (None, None)
+    try:
+        pw_record = pwd.getpwnam(account)  # type: ignore[attr-defined]
+    except KeyError as exc:
+        raise RuntimeError(
+            f"account {account} does not exist, cannot execute task"
+        ) from exc
+
+    target_uid = pw_record.pw_uid
+    target_gid = pw_record.pw_gid
+    current_uid = os.geteuid()
+
+    if current_uid == target_uid:
+        return (None, pw_record.pw_dir)
+
+    if current_uid != 0:
+        raise PermissionError(
+            "scheduler service must run as root to switch task execution account"
+        )
+
+    supplemental: List[int] = []
+    try:
+        supplemental = [entry.gr_gid for entry in grp.getgrall() if account in entry.gr_mem]  # type: ignore[attr-defined]
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.warning(
+            "failed to get supplemental groups for account %s: %s", account, exc
+        )
+
+    groups = sorted(set([target_gid, *supplemental]))
+
+    def _changer() -> None:
+        os.setgid(target_gid)
+        if groups:
+            os.setgroups(groups)
+        os.setuid(target_uid)
+
+    return (_changer, pw_record.pw_dir)
+
+
+def build_task_environment(
+    task: Dict[str, Any], trigger_reason: str, home_dir: Optional[str] = None
+) -> Dict[str, str]:
+    env = os.environ.copy()
+    if home_dir:
+        env["HOME"] = home_dir
+    env.update(
+        {
+            "SCHEDULER_TASK_ID": str(task["id"]),
+            "SCHEDULER_TASK_NAME": task["name"],
+            "SCHEDULER_TASK_ACCOUNT": task["account"],
+            "SCHEDULER_TRIGGER": trigger_reason,
+        }
+    )
+    return env
 
 
 ###############################################################################
@@ -735,16 +827,57 @@ class Database:
         existing = self.get_task(task_id)
         if not existing:
             return None
+        payload = dict(payload)
+        existing_is_active = parse_bool_value(existing.get("is_active"), default=True)
+        next_trigger_type = payload.get("trigger_type", existing.get("trigger_type"))
+        next_event_type = payload.get("event_type", existing.get("event_type") or EVENT_TYPE_SCRIPT)
+        next_is_active = parse_bool_value(
+            payload.get("is_active"), default=existing_is_active
+        )
+        was_schedule = existing.get("trigger_type") == "schedule"
+        is_schedule = next_trigger_type == "schedule"
+        reactivated = not existing_is_active and next_is_active
+
         # 检查 Cron 表达式是否变更，变更则强制 next_run_at 重新计算
         old_expr = existing.get("schedule_expression")
         new_expr = payload.get("schedule_expression", old_expr)
         if (
-            existing.get("trigger_type") == "schedule"
+            was_schedule
             and old_expr != new_expr
             and new_expr
         ):
-            payload = dict(payload)
             payload["next_run_at"] = None  # 让 _prepare_task_payload 自动计算
+
+        if is_schedule and (reactivated or not was_schedule):
+            payload["next_run_at"] = None
+
+        was_script_event = (
+            existing.get("trigger_type") == "event"
+            and (existing.get("event_type") or EVENT_TYPE_SCRIPT) == EVENT_TYPE_SCRIPT
+        )
+        is_script_event = (
+            next_trigger_type == "event" and next_event_type == EVENT_TYPE_SCRIPT
+        )
+        if is_script_event:
+            switched_to_script_event = not was_script_event
+            condition_script_changed = (
+                "condition_script" in payload
+                and (payload.get("condition_script") or "").strip()
+                != (existing.get("condition_script") or "").strip()
+            )
+            condition_interval_changed = (
+                "condition_interval" in payload
+                and int(payload.get("condition_interval", existing.get("condition_interval", 60)))
+                != int(existing.get("condition_interval", 60))
+            )
+            if (
+                reactivated
+                or switched_to_script_event
+                or condition_script_changed
+                or condition_interval_changed
+            ):
+                payload["last_condition_check_at"] = None
+
         task = self._prepare_task_payload({**existing, **payload}, is_update=True)
         task["updated_at"] = isoformat(time_now())
         try:
@@ -852,6 +985,13 @@ class Database:
             self._conn.commit()
         if task_id is not None:
             self.prune_finished_results(task_id)
+
+    def record_finished_result(
+        self, task_id: int, trigger_reason: str, status: str, log_text: str
+    ) -> int:
+        result_id = self.record_result_start(task_id, trigger_reason)
+        self.finalize_result(result_id, status, log_text)
+        return result_id
 
     def fetch_results(
         self, task_id: int, limit: int = 50, offset: int = 0
@@ -1006,7 +1146,7 @@ class Database:
         if not script_body:
             raise ValueError("script body is required")
 
-        is_active = bool(payload.get("is_active", True))
+        is_active = parse_bool_value(payload.get("is_active"), default=True)
         schedule_expression_raw = payload.get("schedule_expression")
         schedule_expression = (
             schedule_expression_raw.strip()
@@ -1066,6 +1206,7 @@ class Database:
                 condition_script = None
                 last_condition_check_at = None
             schedule_expression = None
+            next_run_at = None
 
         return {
             "name": name,
@@ -1124,19 +1265,9 @@ class TaskRunner(threading.Thread):
 
     def _execute_script(self, script: str, timeout: Optional[int]) -> tuple[str, str]:
         cmd = self._build_command(script)
-        env = os.environ.copy()
         preexec_fn, home_dir = self._prepare_account_context()
+        env = build_task_environment(self.task, self.trigger_reason, home_dir)
         task_id = int(self.task["id"])
-        if home_dir:
-            env["HOME"] = home_dir
-        env.update(
-            {
-                "SCHEDULER_TASK_ID": str(self.task["id"]),
-                "SCHEDULER_TASK_NAME": self.task["name"],
-                "SCHEDULER_TASK_ACCOUNT": self.task["account"],
-                "SCHEDULER_TRIGGER": self.trigger_reason,
-            }
-        )
         try:
             process: Popen[str] = Popen(
                 cmd,
@@ -1335,47 +1466,7 @@ class TaskRunner(threading.Thread):
     def _prepare_account_context(
         self,
     ) -> tuple[Optional[Callable[[], None]], Optional[str]]:
-        if not POSIX_ACCOUNT_SUPPORT:
-            return (None, None)
-        account = self.task.get("account")
-        if not account:
-            return (None, None)
-        try:
-            pw_record = pwd.getpwnam(account)  # type: ignore[attr-defined]
-        except KeyError as exc:
-            raise RuntimeError(
-                f"account {account} does not exist, cannot execute task"
-            ) from exc
-
-        target_uid = pw_record.pw_uid
-        target_gid = pw_record.pw_gid
-        current_uid = os.geteuid()
-
-        if current_uid == target_uid:
-            return (None, pw_record.pw_dir)
-
-        if current_uid != 0:
-            raise PermissionError(
-                "scheduler service must run as root to switch task execution account"
-            )
-
-        supplemental: List[int] = []
-        try:
-            supplemental = [entry.gr_gid for entry in grp.getgrall() if account in entry.gr_mem]  # type: ignore[attr-defined]
-        except Exception as exc:  # pylint: disable=broad-except
-            logger.warning(
-                "failed to get supplemental groups for account %s: %s", account, exc
-            )
-
-        groups = sorted(set([target_gid, *supplemental]))
-
-        def _changer() -> None:
-            os.setgid(target_gid)
-            if groups:
-                os.setgroups(groups)
-            os.setuid(target_uid)
-
-        return (_changer, pw_record.pw_dir)
+        return prepare_task_account_context(self.task)
 
 
 class SchedulerEngine:
@@ -1437,7 +1528,7 @@ class SchedulerEngine:
                 logger.info("Task %s still running, skip", task["id"])
                 continue
             if not self._dependencies_met(task):
-                logger.info("Task %s waiting for dependencies", task["id"])
+                self._record_dependency_block(task, "schedule")
                 # re-schedule shortly in future to retry
                 self.db.schedule_next_run(
                     task["id"],
@@ -1457,22 +1548,27 @@ class SchedulerEngine:
             self.db.update_condition_check(task["id"])
             if not task.get("condition_script"):
                 continue
-            ok = self._run_condition(task)
+            ok = self._run_condition(task, "condition")
             if not ok:
                 continue
             if self.db.has_running_instance(task["id"]):
                 continue
             if not self._dependencies_met(task):
+                self._record_dependency_block(task, "condition")
                 continue
             TaskRunner(self.db, task, "condition", self.settings).start()
 
-    def _run_condition(self, task: Dict[str, Any]) -> bool:
+    def _run_condition(self, task: Dict[str, Any], trigger_reason: str) -> bool:
         command = TaskRunner._build_command(task["condition_script"])
+        preexec_fn, home_dir = prepare_task_account_context(task)
+        env = build_task_environment(task, "condition_check", home_dir)
         try:
             completed = run(
                 command,
                 capture_output=True,
                 text=True,
+                env=env,
+                preexec_fn=preexec_fn,
                 timeout=self.settings.condition_timeout,
                 check=False,
             )
@@ -1482,16 +1578,88 @@ class SchedulerEngine:
         except Exception as exc:  # pylint: disable=broad-except
             logger.warning("Condition script for task %s failed: %s", task["id"], exc)
             return False
+        output_preview = summarize_log_text(
+            (completed.stdout or "") + (completed.stderr or "")
+        )
         if completed.returncode != 0:
+            logger.info(
+                "Condition check task %s not matched (exit=%s%s)",
+                task["id"],
+                completed.returncode,
+                f", output={output_preview}" if output_preview else "",
+            )
+            condition_log = f"condition is not matched (exit={completed.returncode})"
+            full_output = ((completed.stdout or "") + (completed.stderr or "")).strip()
+            if full_output:
+                condition_log = f"{condition_log}\n{full_output}"
+            self.db.record_finished_result(
+                int(task["id"]),
+                trigger_reason,
+                "condition_failed",
+                condition_log,
+            )
             return False
+        logger.info(
+            "Condition check task %s matched (exit=%s%s)",
+            task["id"],
+            completed.returncode,
+            f", output={output_preview}" if output_preview else "",
+        )
         return True
 
     def _dependencies_met(self, task: Dict[str, Any]) -> bool:
+        return not self._dependency_block_reasons(task)
+
+    def _dependency_block_reasons(self, task: Dict[str, Any]) -> List[str]:
         deps = task.get("pre_task_ids") or []
+        reasons: List[str] = []
         for dep_id in deps:
+            dep_task = self.db.get_task(dep_id)
+            dep_label = (
+                f"{dep_task.get('name')}#{dep_id}" if dep_task else f"task#{dep_id}"
+            )
             result = self.db.get_latest_result(dep_id)
-            if not result or result.get("status") != "success":
-                return False
+            if not result:
+                reasons.append(f"{dep_label}=no-result")
+                continue
+            status = result.get("status") or "unknown"
+            if status == "success":
+                continue
+            finished_at = result.get("finished_at") or result.get("started_at") or "-"
+            trigger_reason = result.get("trigger_reason") or "-"
+            reasons.append(
+                f"{dep_label}={status}@{finished_at}[{trigger_reason}]"
+            )
+        return reasons
+
+    def _log_dependency_block(self, task: Dict[str, Any], context: str) -> None:
+        reasons = self._dependency_block_reasons(task)
+        if not reasons:
+            return
+        logger.info(
+            "Task %s blocked by dependencies during %s: %s",
+            task["id"],
+            context,
+            ", ".join(reasons),
+        )
+
+    def _record_dependency_block(self, task: Dict[str, Any], context: str) -> bool:
+        reasons = self._dependency_block_reasons(task)
+        if not reasons:
+            return False
+        detail = ", ".join(reasons)
+        logger.info(
+            "Task %s blocked by dependencies during %s: %s",
+            task["id"],
+            context,
+            detail,
+        )
+        self.db.record_finished_result(
+            int(task["id"]),
+            context,
+            "pretask_failed",
+            f"dependencies are not met: {detail}",
+        )
         return True
 
     def _trigger_system_event(self, event_type: str) -> None:
@@ -1505,12 +1673,35 @@ class SchedulerEngine:
             if self.db.has_running_instance(task["id"]):
                 continue
             if not self._dependencies_met(task):
+                self._record_dependency_block(task, trigger_reason)
                 continue
             runner = TaskRunner(self.db, task, trigger_reason, self.settings)
             runner.start()
             runners.append(runner)
         for runner in runners:
             runner.join()
+
+    def check_manual_run_allowed(self, task: Dict[str, Any]) -> tuple[bool, str]:
+        if (
+            task.get("trigger_type") == "event"
+            and (task.get("event_type") or EVENT_TYPE_SCRIPT) == EVENT_TYPE_SCRIPT
+        ):
+            if not task.get("condition_script"):
+                logger.info(
+                    "Task %s manual trigger skipped because condition script is empty",
+                    task["id"],
+                )
+                return False, "condition"
+            if not self._run_condition(task, "manual"):
+                logger.info(
+                    "Task %s manual trigger skipped because condition is not matched",
+                    task["id"],
+                )
+                return False, "condition"
+        if not self._dependencies_met(task):
+            self._record_dependency_block(task, "manual")
+            return False, "dependencies"
+        return True, ""
 
 
 ###############################################################################
@@ -1943,10 +2134,12 @@ class SchedulerRequestHandler(BaseHTTPRequestHandler):
                 if ctx.db.has_running_instance(task_id):
                     result.setdefault("running", []).append(task_id)
                     continue
-                if not ctx.engine._dependencies_met(
-                    task
-                ):  # pylint: disable=protected-access
-                    result.setdefault("blocked", []).append(task_id)
+                allowed, reason = ctx.engine.check_manual_run_allowed(task)
+                if not allowed:
+                    if reason == "condition":
+                        result.setdefault("condition_failed", []).append(task_id)
+                    else:
+                        result.setdefault("pretask_failed", []).append(task_id)
                     continue
                 runner = TaskRunner(ctx.db, task, "manual", ctx.settings)
                 runner.start()
@@ -1987,9 +2180,15 @@ class SchedulerRequestHandler(BaseHTTPRequestHandler):
                 {"error": "task is running"}, status=HTTPStatus.CONFLICT
             )
             return
-        if not ctx.engine._dependencies_met(task):  # pylint: disable=protected-access
+        allowed, reason = ctx.engine.check_manual_run_allowed(task)
+        if not allowed:
+            error_message = (
+                "condition is not matched"
+                if reason == "condition"
+                else "dependencies are not met"
+            )
             self._json_response(
-                {"error": "dependencies are not met"}, status=HTTPStatus.BAD_REQUEST
+                {"error": error_message}, status=HTTPStatus.BAD_REQUEST
             )
             return
         TaskRunner(ctx.db, task, "manual", ctx.settings).start()
@@ -2025,7 +2224,9 @@ class SchedulerRequestHandler(BaseHTTPRequestHandler):
         if not task:
             self.send_error(HTTPStatus.NOT_FOUND)
             return
-        is_active = bool(payload.get("is_active", not task["is_active"]))
+        is_active = parse_bool_value(
+            payload.get("is_active"), default=not task["is_active"]
+        )
         updated = ctx.db.update_task(task_id, {"is_active": is_active})
         self._json_response(updated)
 
