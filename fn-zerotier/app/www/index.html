@@ -12,12 +12,11 @@
   <div class="page-shell">
     <header class="hero">
       <div class="hero-copy">
-        <p class="eyebrow">FN Apps</p>
+        <p class="eyebrow">RRORG</p>
         <h1>ZeroTier 组网控制台</h1>
-        <p class="subtitle">查看节点身份和服务状态，并直接加入或退出 ZeroTier 网络。</p>
       </div>
       <div class="hero-actions">
-        <button id="refreshBtn" class="btn btn-primary" type="button">刷新状态</button>
+        <button id="refreshBtn" class="btn btn-primary" type="button">刷新</button>
       </div>
     </header>
 
@@ -25,7 +24,6 @@
       <section class="panel status-panel">
         <div class="panel-head">
           <h2>服务状态</h2>
-          <div id="serviceBadge" class="badge badge-muted">读取中</div>
         </div>
         <div class="stats-grid">
           <div class="stat-card">
@@ -45,38 +43,100 @@
             <strong id="onlineState">-</strong>
           </div>
         </div>
-        <div class="meta-list">
-          <div><span>端口</span><strong id="servicePort">-</strong></div>
-          <div><span>地址</span><strong id="assignedAddresses">-</strong></div>
-        </div>
       </section>
 
-      <section class="panel join-panel">
+      <section class="panel network-panel">
         <div class="panel-head">
-          <h2>加入网络</h2>
-        </div>
-        <form id="joinForm" class="join-form">
-          <label for="networkId">Network ID</label>
-          <input id="networkId" name="networkId" type="text" maxlength="16" placeholder="例如：8056c2e21c000001"
-            autocomplete="off">
-          <button class="btn btn-primary" type="submit">加入</button>
-        </form>
-        <p class="hint">请输入 16 位十六进制网络 ID。你也可以先打开 <a class="hint-link" href="https://my.zerotier.com/" target="_blank"
-            rel="noreferrer">https://my.zerotier.com/</a> 管理网络，加入后网络会出现在下方列表。</p>
-      </section>
-
-      <section class="panel networks-panel">
-        <div class="panel-head">
-          <h2>已加入网络</h2>
+          <h2>网络管理</h2>
           <span id="networkCount" class="panel-meta">0 个网络</span>
         </div>
-        <div id="networksEmpty" class="empty-state">当前还没有加入任何网络。</div>
-        <div id="networkList" class="network-list"></div>
+        <div class="panel-stack">
+          <div class="panel-block">
+            <form id="joinForm" class="join-form">
+              <label for="networkId">Network ID</label>
+              <input id="networkId" name="networkId" type="text" maxlength="16" placeholder="例如：8056c2e21c000001"
+                autocomplete="off">
+              <button class="btn btn-primary" type="submit">加入</button>
+            </form>
+          </div>
+          <div class="panel-block">
+            <div id="networksEmpty" class="empty-state">当前还没有加入任何网络。</div>
+            <div id="networkList" class="network-list"></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel moon-panel">
+        <div class="panel-head">
+          <h2>Moon 管理</h2>
+          <div class="panel-meta-group">
+            <span id="createdMoonCount" class="panel-meta">创建 0</span>
+            <span id="joinedMoonCount" class="panel-meta">加入 0</span>
+          </div>
+        </div>
+        <div class="panel-stack">
+          <div class="panel-block">
+            <form id="moonCreateForm" class="moon-create-table-form">
+              <div class="moon-create-header">
+                <span>World ID</span>
+                <span>Seed</span>
+                <span>Root Identity</span>
+                <span>Stable Endpoints</span>
+                <span>状态</span>
+                <span>操作</span>
+              </div>
+              <div class="moon-create-row moon-created-editor-row">
+                <div class="moon-created-col moon-create-col-id">
+                  <input id="moonCreateWorldIdInput" name="moonCreateWorldIdInput" type="text" maxlength="16" placeholder="World ID" autocomplete="off">
+                </div>
+                <div class="moon-created-col moon-create-col-seed">
+                  <strong id="moonCreateSeed">-</strong>
+                </div>
+                <div class="moon-created-col moon-create-col-identity">
+                  <strong id="moonRootIdentity">-</strong>
+                </div>
+                <div class="moon-created-col moon-create-col-endpoints">
+                  <input id="moonStableEndpoints" name="moonStableEndpoints" type="text" placeholder="203.0.113.10/9993,198.51.100.20/9993" autocomplete="off">
+                </div>
+                <div class="moon-created-col moon-create-col-state">
+                  <span id="moonCreateSupport" class="pill pill-muted">待创建</span>
+                </div>
+                <div class="moon-created-col moon-create-col-actions">
+                  <button id="moonCreateBtn" class="btn btn-primary" type="submit">创建</button>
+                  <button id="moonCreateCancelBtn" class="btn btn-secondary" type="button" hidden>取消</button>
+                </div>
+              </div>
+            </form>
+          </div>
+          <div class="panel-block">
+            <div id="createdMoonsEmpty" class="empty-state">当前还没有创建任何 Moon。</div>
+            <div id="createdMoonList" class="moon-list"></div>
+          </div>
+          <div class="panel-block">
+            <form id="moonForm" class="moon-form">
+              <div class="field-group">
+                <label for="moonWorldId">World ID</label>
+                <input id="moonWorldId" name="moonWorldId" type="text" maxlength="16" placeholder="例如：ad7592d9dc" autocomplete="off">
+              </div>
+              <div class="field-group">
+                <label for="moonSeed">Seed</label>
+                <input id="moonSeed" name="moonSeed" type="text" maxlength="10" placeholder="例如：abcdef1234" autocomplete="off">
+              </div>
+              <div class="moon-form-actions">
+                <button class="btn btn-primary" type="submit">加入 Moon</button>
+              </div>
+            </form>
+          </div>
+          <div class="panel-block">
+            <div id="joinedMoonsEmpty" class="empty-state">当前还没有加入任何 Moon。</div>
+            <div id="joinedMoonList" class="moon-list"></div>
+          </div>
+        </div>
       </section>
 
       <section class="panel peers-panel">
         <div class="panel-head">
-          <h2>Peer 概览</h2>
+          <h2>Peer 信息</h2>
           <span id="peerSummary" class="panel-meta">-</span>
         </div>
         <div id="peerList" class="peer-list">

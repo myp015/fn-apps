@@ -1,22 +1,55 @@
-const serviceBadge = document.getElementById("serviceBadge");
 const nodeIdEl = document.getElementById("nodeId");
 const versionEl = document.getElementById("version");
 const onlineStateEl = document.getElementById("onlineState");
 const peerSummaryEl = document.getElementById("peerSummary");
-const servicePortEl = document.getElementById("servicePort");
 const serviceEnabledEl = document.getElementById("serviceEnabled");
-const assignedAddressesEl = document.getElementById("assignedAddresses");
 const networkCountEl = document.getElementById("networkCount");
 const networkListEl = document.getElementById("networkList");
 const networksEmptyEl = document.getElementById("networksEmpty");
+const joinedMoonCountEl = document.getElementById("joinedMoonCount");
+const joinedMoonListEl = document.getElementById("joinedMoonList");
+const joinedMoonsEmptyEl = document.getElementById("joinedMoonsEmpty");
+const createdMoonCountEl = document.getElementById("createdMoonCount");
+const createdMoonListEl = document.getElementById("createdMoonList");
+const createdMoonsEmptyEl = document.getElementById("createdMoonsEmpty");
+const moonForm = document.getElementById("moonForm");
+const moonJoinWorldIdInput = document.getElementById("moonWorldId");
+const moonSeedInput = document.getElementById("moonSeed");
+const moonCreateSeedEl = document.getElementById("moonCreateSeed");
+const moonRootIdentityEl = document.getElementById("moonRootIdentity");
+const moonCreateSupportEl = document.getElementById("moonCreateSupport");
+const moonCreateForm = document.getElementById("moonCreateForm");
+const moonCreateWorldIdInput = document.getElementById("moonCreateWorldIdInput");
+const moonStableEndpointsInput = document.getElementById("moonStableEndpoints");
+const moonCreateCancelBtn = document.getElementById("moonCreateCancelBtn");
+const moonCreateBtn = document.getElementById("moonCreateBtn");
 const peerListEl = document.getElementById("peerList");
 const refreshBtn = document.getElementById("refreshBtn");
 const joinForm = document.getElementById("joinForm");
 const networkIdInput = document.getElementById("networkId");
 const toastEl = document.getElementById("toast");
 
+const NETWORK_STATUS_META = {
+  OK: { className: "pill-ok", text: "正常" },
+  ACCESS_DENIED: { className: "pill-warn", text: "访问被拒绝" },
+  REQUESTING_CONFIGURATION: { className: "pill-warn", text: "等待配置" },
+};
+
+const MOON_TABLE_HEADER_HTML = `
+  <div class="moon-created-header">
+    <span>World ID</span>
+    <span>Seed</span>
+    <span>Root Identity</span>
+    <span>Stable Endpoints</span>
+    <span>状态</span>
+    <span>操作</span>
+  </div>
+`;
+
 let busy = false;
 let toastTimer = null;
+let latestStatusData = null;
+let editingCreatedMoonId = "";
 
 function showToast(text, tone = "info") {
   if (!toastEl) return;
@@ -27,6 +60,15 @@ function showToast(text, tone = "info") {
   toastTimer = window.setTimeout(() => {
     toastEl.classList.remove("show");
   }, 3200);
+}
+
+function escapeHtml(value) {
+  return String(value || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
 }
 
 async function requestJson(url, options = {}) {
@@ -56,37 +98,109 @@ function setBusy(nextBusy) {
   }
 }
 
+async function copyText(text, successMessage) {
+  if (!text) {
+    showToast("没有可复制的内容", "error");
+    return;
+  }
+
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      await navigator.clipboard.writeText(text);
+    } else {
+      const input = document.createElement("textarea");
+      input.value = text;
+      document.body.appendChild(input);
+      input.select();
+      document.execCommand("copy");
+      document.body.removeChild(input);
+    }
+    showToast(successMessage, "success");
+  } catch (error) {
+    showToast("复制失败", "error");
+  }
+}
+
+function toBool(value) {
+  if (typeof value === "boolean") return value;
+  if (typeof value === "number") return value !== 0;
+  const normalized = String(value || "").trim().toLowerCase();
+  return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on";
+}
+
 function renderService(data) {
   const service = data.service || {};
   const info = data.info || {};
-  const networks = Array.isArray(data.networks) ? data.networks : [];
   const peerSummary = data.peerSummary || {};
-  const online = String(info.online || "").toUpperCase();
 
-  serviceBadge.textContent = service.active ? "运行中" : service.installed ? "已停止" : "未安装";
-  serviceBadge.className = `badge ${service.active ? "badge-ok" : service.installed ? "badge-warn" : "badge-muted"}`;
+  const serviceActive = toBool(service.active);
+  const serviceEnabled = toBool(service.enabled);
 
   nodeIdEl.textContent = info.address || "-";
   versionEl.textContent = info.version || "-";
-  onlineStateEl.textContent = online || "-";
+  onlineStateEl.textContent = serviceActive ? "运行中" : "未运行";
   peerSummaryEl.textContent = `${peerSummary.online || 0} / ${peerSummary.total || 0}`;
-  servicePortEl.textContent = info.port || "-";
-  serviceEnabledEl.textContent = service.enabled ? "已启用" : "未启用";
-
-  const addresses = networks
-    .flatMap((item) => (Array.isArray(item.assignedAddresses) ? item.assignedAddresses : []))
-    .filter(Boolean);
-  assignedAddressesEl.textContent = addresses.length ? addresses.join(", ") : "-";
+  serviceEnabledEl.textContent = serviceEnabled ? "已启用" : "未启用";
 }
 
 function networkStatusClass(status) {
-  if (status === "OK") return "pill-ok";
-  if (status === "REQUESTING_CONFIGURATION" || status === "ACCESS_DENIED") return "pill-warn";
-  return "pill-muted";
+  return NETWORK_STATUS_META[status]?.className || "pill-muted";
+}
+
+function networkStatusText(status) {
+  return NETWORK_STATUS_META[status]?.text || status || "未知";
 }
 
 function checkedAttr(value) {
-  return value ? "checked" : "";
+  return toBool(value) ? "checked" : "";
+}
+
+function isValidMoonWorldId(value) {
+  return /^(?:[0-9a-fA-F]{10}|0{6}[0-9a-fA-F]{10})$/.test(String(value || "").trim());
+}
+
+function extractSeedFromIdentity(identity) {
+  const normalized = String(identity || "").trim().toLowerCase();
+  if (/^[0-9a-f]{10}$/.test(normalized)) {
+    return normalized;
+  }
+  const match = normalized.match(/^([0-9a-f]{10}):/);
+  return match ? match[1] : "";
+}
+
+function resetMoonJoinForm() {
+  moonJoinWorldIdInput.value = "";
+  moonSeedInput.value = "";
+}
+
+function resetMoonCreateForm() {
+  editingCreatedMoonId = "";
+  moonCreateBtn.textContent = "创建";
+  moonCreateCancelBtn.hidden = true;
+  moonCreateWorldIdInput.value = "";
+  moonStableEndpointsInput.value = "";
+}
+
+function moonEndpoints(moon) {
+  const roots = Array.isArray(moon?.roots) ? moon.roots : [];
+  return roots.flatMap((root) => (Array.isArray(root?.stableEndpoints) ? root.stableEndpoints : [])).filter(Boolean);
+}
+
+function getCreatedMoonById(worldId) {
+  const moons = Array.isArray(latestStatusData?.createdMoons) ? latestStatusData.createdMoons : [];
+  return moons.find((moon) => moon.id === worldId) || null;
+}
+
+function getMoonRowData(moon) {
+  const roots = Array.isArray(moon?.roots) ? moon.roots : [];
+  const identity = roots.length ? roots[0].identity || "" : "";
+  const seed = roots.length ? extractSeedFromIdentity(identity) : "";
+  const endpoints = moonEndpoints(moon);
+  return {
+    identity: identity || "-",
+    seed: seed || "-",
+    endpointsText: endpoints.length ? endpoints.join(", ") : "-",
+  };
 }
 
 function formatPeerPathEntry(entry) {
@@ -131,38 +245,176 @@ function renderNetworks(data) {
       const name = network.name || "未命名网络";
       const nwid = network.nwid || "-";
       const addresses = Array.isArray(network.assignedAddresses) && network.assignedAddresses.length
-        ? network.assignedAddresses.join("<br>")
+        ? network.assignedAddresses.join(", ")
         : "尚未分配地址";
       return `
-        <article class="network-card">
-          <div class="network-top">
-            <div>
-              <h3>${name}</h3>
-              <p class="network-id">${nwid}</p>
-            </div>
-            <span class="pill ${networkStatusClass(network.status)}">${network.status || "UNKNOWN"}</span>
+        <article class="network-table-row">
+          <div class="network-table-col network-table-col-name">
+            <strong>${name}</strong>
           </div>
-          <div class="network-body">
-            <div class="network-meta">
-              <div><span>类型</span><strong>${network.type || "-"}</strong></div>
-              <div><span>设备</span><strong>${network.portDeviceName || network.dev || "-"}</strong></div>
-              <div><span>地址</span><strong>${addresses}</strong></div>
-            </div>
+          <div class="network-table-col network-table-col-id">
+            <strong>${nwid}</strong>
+          </div>
+          <div class="network-table-col network-table-col-type">
+            <strong>${network.type || "-"}</strong>
+          </div>
+          <div class="network-table-col network-table-col-device">
+            <strong>${network.portDeviceName || network.dev || "-"}</strong>
+          </div>
+          <div class="network-table-col network-table-col-addresses">
+            <strong>${addresses}</strong>
+          </div>
+          <div class="network-table-col network-table-col-status">
+            <span class="pill ${networkStatusClass(network.status)}">${networkStatusText(network.status)}</span>
+          </div>
+          <div class="network-table-col network-table-col-settings">
             <div class="network-flags" data-network="${nwid}">
               <label><input type="checkbox" data-setting="allowManaged" ${checkedAttr(network.allowManaged)}> Managed</label>
               <label><input type="checkbox" data-setting="allowDNS" ${checkedAttr(network.allowDNS)}> DNS</label>
               <label><input type="checkbox" data-setting="allowDefault" ${checkedAttr(network.allowDefault)}> Default Route</label>
               <label><input type="checkbox" data-setting="allowGlobal" ${checkedAttr(network.allowGlobal)}> Global IP</label>
             </div>
+          </div>
+          <div class="network-table-col network-table-col-actions">
             <div class="network-actions">
-              <button class="btn btn-secondary" type="button" data-action="save-network" data-network="${nwid}">保存设置</button>
-              <button class="btn btn-danger" type="button" data-action="leave-network" data-network="${nwid}">退出网络</button>
+              <button class="btn btn-danger" type="button" data-action="leave-network" data-network="${nwid}">退出</button>
             </div>
           </div>
         </article>
       `;
     })
     .join("");
+
+  networkListEl.innerHTML = `
+    <div class="network-table-header">
+      <span>名称</span>
+      <span>Network ID</span>
+      <span>类型</span>
+      <span>设备</span>
+      <span>地址</span>
+      <span>状态</span>
+      <span>设置</span>
+      <span>操作</span>
+    </div>
+    ${networkListEl.innerHTML}
+  `;
+}
+
+
+function renderMoonTable(container, rowsHtml) {
+  container.innerHTML = `${MOON_TABLE_HEADER_HTML}${rowsHtml}`;
+}
+
+function renderMoonSection(moons, countEl, emptyEl, listEl, countLabel, rowRenderer) {
+  countEl.textContent = `${countLabel} ${moons.length}`;
+  emptyEl.style.display = moons.length ? "none" : "block";
+
+  if (!moons.length) {
+    listEl.innerHTML = "";
+    return;
+  }
+
+  renderMoonTable(listEl, moons.map(rowRenderer).join(""));
+}
+
+function renderJoinedMoonRow(moon) {
+  const active = moon.active !== undefined ? toBool(moon.active) : true;
+  const waiting = toBool(moon.waiting);
+  const { identity, seed, endpointsText } = getMoonRowData(moon);
+  const stateClass = !active ? "pill-muted" : waiting ? "pill-warn" : "pill-ok";
+  const stateText = !active ? "已停止" : waiting ? "等待拉取" : "已生效";
+  return `
+    <article class="moon-created-row">
+      <div class="moon-created-col moon-created-col-id">
+          <strong>${moon.id || "-"}</strong>
+      </div>
+      <div class="moon-created-col moon-created-col-seed">
+          <strong>${seed}</strong>
+      </div>
+      <div class="moon-created-col moon-created-col-identity">
+        <strong>${identity}</strong>
+      </div>
+      <div class="moon-created-col moon-created-col-endpoints">
+        <strong>${endpointsText}</strong>
+      </div>
+      <div class="moon-created-col moon-created-col-state">
+        <span class="pill ${stateClass}">${stateText}</span>
+      </div>
+      <div class="moon-created-col moon-created-col-actions">
+        <button class="btn btn-danger" type="button" data-action="leave-joined-moon" data-world-id="${moon.id || ""}">移除</button>
+      </div>
+    </article>
+  `;
+}
+
+function renderCreatedMoonRow(moon) {
+  const active = toBool(moon.active);
+  const { identity, seed, endpointsText } = getMoonRowData(moon);
+  const orbitCommand = moon.orbitCommand || (moon.id && seed !== "-" ? `zerotier-cli orbit ${moon.id} ${seed}` : "");
+  const moonFileBase64 = moon.moonFileBase64 || "";
+  const moonFileName = moon.moonFileName || `${String(moon.id || "moon")}.moon`;
+  return `
+    <article class="moon-created-row">
+      <div class="moon-created-col moon-created-col-id">
+          <strong>${moon.id || "-"}</strong>
+      </div>
+      <div class="moon-created-col moon-created-col-seed">
+          <strong>${seed}</strong>
+      </div>
+      <div class="moon-created-col moon-created-col-identity">
+        <strong>${identity}</strong>
+      </div>
+      <div class="moon-created-col moon-created-col-endpoints">
+        <strong>${endpointsText}</strong>
+      </div>
+      <div class="moon-created-col moon-created-col-state">
+          <span class="pill ${active ? "pill-ok" : "pill-muted"}">${active ? "已启动" : "已停止"}</span>
+      </div>
+      <div class="moon-created-col moon-created-col-actions">
+        <button class="btn btn-secondary" type="button" data-action="copy-created-moon-orbit" data-orbit-command="${escapeHtml(orbitCommand)}" ${orbitCommand ? "" : "disabled"}>复制</button>
+        <button class="btn btn-secondary" type="button" data-action="download-created-moon" data-moon-file-base64="${escapeHtml(moonFileBase64)}" data-moon-file-name="${escapeHtml(moonFileName)}" ${moonFileBase64 ? "" : "disabled"}>下载</button>
+        <button class="btn btn-secondary" type="button" data-action="edit-created-moon" data-world-id="${moon.id || ""}">修改</button>
+        <button class="btn ${active ? "btn-secondary" : "btn-primary"}" type="button" data-action="${active ? "stop-created-moon" : "start-created-moon"}" data-world-id="${moon.id || ""}">${active ? "停止" : "启动"}</button>
+        <button class="btn btn-danger" type="button" data-action="remove-created-moon" data-world-id="${moon.id || ""}">移除</button>
+      </div>
+    </article>
+  `;
+}
+
+function renderJoinedMoons(data) {
+  const moons = Array.isArray(data.joinedMoons) ? data.joinedMoons : [];
+  renderMoonSection(moons, joinedMoonCountEl, joinedMoonsEmptyEl, joinedMoonListEl, "加入", renderJoinedMoonRow);
+}
+
+function renderCreatedMoons(data) {
+  const moons = Array.isArray(data.createdMoons) ? data.createdMoons : [];
+  renderMoonSection(moons, createdMoonCountEl, createdMoonsEmptyEl, createdMoonListEl, "创建", renderCreatedMoonRow);
+}
+
+function renderMoonCreator(data) {
+  const info = data.moonCreate || {};
+  const supported = toBool(info.supported);
+  const error = info.error || "";
+
+  moonCreateSeedEl.textContent = info.seed || "-";
+  moonRootIdentityEl.textContent = info.rootIdentity || error || "-";
+  moonCreateSupportEl.textContent = supported ? (editingCreatedMoonId ? "编辑中" : "待创建") : "不可用";
+  moonCreateSupportEl.className = supported
+    ? `pill ${editingCreatedMoonId ? "pill-warn" : "pill-muted"}`
+    : "pill pill-muted";
+  moonCreateBtn.disabled = !supported;
+  moonCreateWorldIdInput.disabled = !supported;
+  moonStableEndpointsInput.disabled = !supported;
+
+  if (!moonSeedInput.value && info.seed) {
+    moonSeedInput.value = info.seed;
+  }
+  if (!moonJoinWorldIdInput.value && info.worldId) {
+    moonJoinWorldIdInput.value = info.worldId;
+  }
+  if (!editingCreatedMoonId && !moonCreateWorldIdInput.value && info.worldId) {
+    moonCreateWorldIdInput.value = info.worldId;
+  }
 }
 
 function renderPeers(data) {
@@ -220,7 +472,11 @@ function renderPeers(data) {
 }
 
 function renderAll(data) {
+  latestStatusData = data;
   renderService(data);
+  renderMoonCreator(data);
+  renderJoinedMoons(data);
+  renderCreatedMoons(data);
   renderNetworks(data);
   renderPeers(data);
 }
@@ -247,8 +503,10 @@ async function postAction(action, payload, successMessage) {
     });
     renderAll(data);
     showToast(successMessage || data.message || "操作成功", "success");
+    return data;
   } catch (error) {
     showToast(error.message || String(error), "error");
+    return null;
   } finally {
     setBusy(false);
   }
@@ -268,25 +526,144 @@ joinForm.addEventListener("submit", async (event) => {
   networkIdInput.value = "";
 });
 
+moonForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const worldId = (moonJoinWorldIdInput.value || "").trim();
+  const seed = (moonSeedInput.value || "").trim();
+  if (!isValidMoonWorldId(worldId)) {
+    showToast("World ID 必须是 10 位十六进制，或补零后的 16 位字符串", "error");
+    moonJoinWorldIdInput.focus();
+    return;
+  }
+  if (!/^[0-9a-fA-F]{10}$/.test(seed)) {
+    showToast("Seed 必须是 10 位十六进制字符串", "error");
+    moonSeedInput.focus();
+    return;
+  }
+  const data = await postAction("moon_join", { worldId, seed }, `已加入 moon ${worldId}`);
+  if (data) {
+    resetMoonJoinForm();
+  }
+});
+
+moonCreateCancelBtn.addEventListener("click", () => {
+  resetMoonCreateForm();
+});
+
+moonCreateForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const worldId = (moonCreateWorldIdInput.value || "").trim();
+  const stableEndpoints = (moonStableEndpointsInput.value || "").trim();
+  if (!isValidMoonWorldId(worldId)) {
+    showToast("World ID 必须是 10 位十六进制，或补零后的 16 位字符串", "error");
+    moonCreateWorldIdInput.focus();
+    return;
+  }
+  if (!stableEndpoints) {
+    showToast("请至少填写一个 Stable Endpoint", "error");
+    moonStableEndpointsInput.focus();
+    return;
+  }
+
+  const action = editingCreatedMoonId ? "moon_update" : "moon_create";
+  const payload = editingCreatedMoonId
+    ? { oldWorldId: editingCreatedMoonId, worldId, stableEndpoints }
+    : { worldId, stableEndpoints };
+  const successMessage = editingCreatedMoonId ? `已修改 moon ${worldId}` : `已创建 moon ${worldId}`;
+  const data = await postAction(action, payload, successMessage);
+  if (data) {
+    resetMoonCreateForm();
+  }
+});
+
 document.addEventListener("click", async (event) => {
   const button = event.target.closest("button[data-action]");
   if (!button) return;
 
   const action = button.getAttribute("data-action");
   const network = button.getAttribute("data-network") || "";
+  const worldId = button.getAttribute("data-world-id") || "";
+  const orbitCommand = button.getAttribute("data-orbit-command") || "";
+  const moonFileBase64 = button.getAttribute("data-moon-file-base64") || "";
+  const moonFileName = button.getAttribute("data-moon-file-name") || "";
   if (action === "leave-network") {
     await postAction("leave", { network }, `已离开网络 ${network}`);
     return;
   }
 
-  if (action === "save-network") {
-    const panel = button.closest(".network-card");
-    const settings = {};
-    for (const checkbox of panel.querySelectorAll("input[data-setting]")) {
-      settings[checkbox.dataset.setting] = checkbox.checked;
+  if (action === "edit-created-moon") {
+    const moon = getCreatedMoonById(worldId);
+    if (!moon) {
+      showToast(`未找到已创建 moon ${worldId}`, "error");
+      return;
     }
-    await postAction("network_set", { network, settings }, `网络 ${network} 设置已保存`);
+    editingCreatedMoonId = worldId;
+    moonCreateBtn.textContent = "修改";
+    moonCreateCancelBtn.hidden = false;
+    moonCreateWorldIdInput.value = moon.id || "";
+    moonStableEndpointsInput.value = moonEndpoints(moon).join("\n");
+    moonCreateSupportEl.textContent = "编辑中";
+    moonCreateSupportEl.className = "pill pill-warn";
+    moonCreateWorldIdInput.focus();
+    return;
   }
+
+  if (action === "copy-created-moon-orbit") {
+    await copyText(orbitCommand, "Orbit 命令已复制");
+    return;
+  }
+
+  if (action === "download-created-moon") {
+    if (!moonFileBase64) {
+      showToast("当前没有可下载的 .moon 文件", "error");
+      return;
+    }
+    const link = document.createElement("a");
+    link.href = `data:application/octet-stream;base64,${moonFileBase64}`;
+    link.download = moonFileName || "moon.moon";
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    return;
+  }
+
+  if (action === "start-created-moon") {
+    await postAction("moon_start", { worldId }, `已启动 moon ${worldId}`);
+    return;
+  }
+
+  if (action === "stop-created-moon") {
+    await postAction("moon_stop", { worldId }, `已停止 moon ${worldId}`);
+    if (editingCreatedMoonId && editingCreatedMoonId === worldId) {
+      resetMoonCreateForm();
+    }
+    return;
+  }
+
+  if (action === "remove-created-moon") {
+    await postAction("moon_remove", { worldId }, `已移除 moon ${worldId}`);
+    if (editingCreatedMoonId && editingCreatedMoonId === worldId) {
+      resetMoonCreateForm();
+    }
+    return;
+  }
+
+  if (action === "leave-joined-moon") {
+    await postAction("moon_leave", { worldId }, `已移除 moon ${worldId}`);
+    return;
+  }
+});
+
+document.addEventListener("change", async (event) => {
+  const checkbox = event.target.closest("input[data-setting]");
+  if (!checkbox) return;
+  const panel = checkbox.closest(".network-table-row");
+  if (!panel) return;
+  const network = panel.querySelector(".network-flags")?.getAttribute("data-network") || "";
+  const setting = checkbox.getAttribute("data-setting") || "";
+  if (!network) return;
+  if (!setting) return;
+  await postAction("network_set", { network, settings: { [setting]: checkbox.checked } }, `网络 ${network} 设置已保存`);
 });
 
 refreshStatus();
