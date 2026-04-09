@@ -1,0 +1,14 @@
+appname               = fn-vgmng
+version               = 1.0.0
+display_name          = VGManager
+desc                  = 存储池管理, 支持非飞牛存储池(其他NAS系统存储池)的管理。
+platform              = all
+source                = thirdparty
+desktop_uidir         = ui
+desktop_applaunchname = fn-vgmng.Application
+maintainer            = Ing
+maintainer_url        = https://github.com/RROrg
+distributor           = RROrg
+distributor_url       = https://github.com/RROrg/fn-apps
+install_type          = root
+reloadui              = yes

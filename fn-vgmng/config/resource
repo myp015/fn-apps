@@ -1,0 +1,14 @@
+{
+  "data-share": {
+    "shares": [
+      {
+        "name": "fn-vgmng",
+        "permission": {
+          "rw": [
+            "fn-vgmng"
+          ]
+        }
+      }
+    ]
+  }
+}
