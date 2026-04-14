@@ -7,51 +7,62 @@ ARCH_DEB="$(echo "${ARCH}" | sed 's/x86_64/amd64/; s/aarch64/arm64/')"
 
 mkdir -p "${TRIM_PKGTMP}"
 
-DOWNLOAD_BASE="https://mirrors.tuna.tsinghua.edu.cn/debian/pool/main/o/openssl"
-DEB_NAME="$(curl -fsSL "${DOWNLOAD_BASE}" | grep -oE "libssl1.1_[^\"'<> ]+_${ARCH_DEB}\\.deb" | sort -Vu | tail -n 1)"
-[ -n "${DEB_NAME}" ] || {
-  echo "ERROR: Failed to find libssl1.1 package for architecture ${ARCH}." >$TRIM_TEMP_LOGFILE
-  exit 1
-}
-
-curl -fSL "${DOWNLOAD_BASE}/${DEB_NAME//+/%2B}" -o "${TRIM_PKGTMP}/${DEB_NAME}"
-if [ $? -ne 0 ] || [ ! -f "${TRIM_PKGTMP}/${DEB_NAME}" ]; then
-  echo "ERROR: Failed to download ${DEB_NAME}" >$TRIM_TEMP_LOGFILE
-  exit 1
-fi
-
-dpkg -i "${TRIM_PKGTMP}/${DEB_NAME}" || {
-  export DEBIAN_FRONTEND=noninteractive
-  apt-get install -f -y || {
-    echo "ERROR: Failed to install libssl1.1 package." >$TRIM_TEMP_LOGFILE
+apt update
+if apt-cache pkgnames 2>/dev/null | grep -Ewq '^libssl1.1$'; then
+  apt install -y --no-install-recommends libssl1.1
+  [ $? -ne 0 ] && echo "Failed to install libssl1.1 package." >$TRIM_TEMP_LOGFILE && exit 1
+else
+  DOWNLOAD_BASE="https://mirrors.ustc.edu.cn/debian/pool/main/o/openssl"
+  DEB_NAME="$(curl -fsSL "${DOWNLOAD_BASE}" | grep -oE "libssl1.1_[^\"'<> ]+_${ARCH_DEB}\\.deb" | sort -Vu | tail -n 1)"
+  [ -n "${DEB_NAME}" ] || {
+    echo "ERROR: Failed to find libssl1.1 package for architecture ${ARCH}." >$TRIM_TEMP_LOGFILE
     exit 1
   }
-}
 
-DOWNLOAD_BASE="https://download.zerotier.com/dist/debian/focal"
-DEB_NAME="$(curl -fsSL "${DOWNLOAD_BASE}" | grep -oE "zerotier-one_[^\"'<> ]+_${ARCH_DEB}\\.deb" | sort -Vu | tail -n 1)"
-[ -n "${DEB_NAME}" ] || {
-  echo "ERROR: Failed to find zerotier-one package for architecture ${ARCH}." >$TRIM_TEMP_LOGFILE
-  exit 1
-}
+  curl -fSL "${DOWNLOAD_BASE}/${DEB_NAME//+/%2B}" -o "${TRIM_PKGTMP}/${DEB_NAME}"
+  if [ $? -ne 0 ] || [ ! -f "${TRIM_PKGTMP}/${DEB_NAME}" ]; then
+    echo "ERROR: Failed to download ${DEB_NAME}" >$TRIM_TEMP_LOGFILE
+    exit 1
+  fi
 
-curl -fSL "${DOWNLOAD_BASE}/${DEB_NAME//+/%2B}" -o "${TRIM_PKGTMP}/${DEB_NAME}"
-if [ $? -ne 0 ] || [ ! -f "${TRIM_PKGTMP}/${DEB_NAME}" ]; then
-  echo "ERROR: Failed to download ${DEB_NAME}" >$TRIM_TEMP_LOGFILE
-  exit 1
+  dpkg -i "${TRIM_PKGTMP}/${DEB_NAME}" || {
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get install -f -y || {
+      echo "ERROR: Failed to install libssl1.1 package." >$TRIM_TEMP_LOGFILE
+      exit 1
+    }
+  }
 fi
 
-dpkg -i "${TRIM_PKGTMP}/${DEB_NAME}" || {
-  export DEBIAN_FRONTEND=noninteractive
-  apt-get install -f -y || {
-    echo "ERROR: Failed to install zerotier-one package." >$TRIM_TEMP_LOGFILE
+if apt-cache pkgnames 2>/dev/null | grep -Ewq '^zerotier-one$'; then
+  apt install -y --no-install-recommends zerotier-one
+  [ $? -ne 0 ] && echo "Failed to install zerotier-one package." >$TRIM_TEMP_LOGFILE && exit 1
+else
+  DOWNLOAD_BASE="https://download.zerotier.com/dist/debian/focal"
+  DEB_NAME="$(curl -fsSL "${DOWNLOAD_BASE}" | grep -oE "zerotier-one_[^\"'<> ]+_${ARCH_DEB}\\.deb" | sort -Vu | tail -n 1)"
+  [ -n "${DEB_NAME}" ] || {
+    echo "ERROR: Failed to find zerotier-one package for architecture ${ARCH}." >$TRIM_TEMP_LOGFILE
     exit 1
   }
-}
 
-command -v zerotier-cli || {
-  echo "ERROR: zerotier-cli command not found after installation." >$TRIM_TEMP_LOGFILE
-  exit 1
-}
+  curl -fSL "${DOWNLOAD_BASE}/${DEB_NAME//+/%2B}" -o "${TRIM_PKGTMP}/${DEB_NAME}"
+  if [ $? -ne 0 ] || [ ! -f "${TRIM_PKGTMP}/${DEB_NAME}" ]; then
+    echo "ERROR: Failed to download ${DEB_NAME}" >$TRIM_TEMP_LOGFILE
+    exit 1
+  fi
+
+  dpkg -i "${TRIM_PKGTMP}/${DEB_NAME}" || {
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get install -f -y || {
+      echo "ERROR: Failed to install zerotier-one package." >$TRIM_TEMP_LOGFILE
+      exit 1
+    }
+  }
+
+  command -v zerotier-cli || {
+    echo "ERROR: zerotier-cli command not found after installation." >$TRIM_TEMP_LOGFILE
+    exit 1
+  }
+fi
 
 exit 0
