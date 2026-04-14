@@ -37,7 +37,7 @@ for /d %%A in (fn-*) do (
       ) else (
       .\fnpack.exe build --directory %%A
       if defined APPNAME if defined VERSION if exist "!APPNAME!.fpk" (
-        move /y "!APPNAME!.fpk" "!APPNAME!_v!VERSION!.fpk" >nul
+        move /y "!APPNAME!.fpk" "!APPNAME!_!PLATFORM!_v!VERSION!.fpk" >nul
       )
     )
   )
