@@ -22,6 +22,7 @@ const REQUEST_TIMEOUT_MS = 10000;
 
 let lastRunning = false;
 let lastInternetStatus = undefined;
+let noWifiNoticeShown = false;
 
 const I18N = {
   zh: {
@@ -97,6 +98,7 @@ const I18N = {
     "msg.saved": "已保存",
     "msg.savedRestart": "已保存并重启热点",
     "msg.no5g": "当前监管域下 5G 信道不可用，已切换到 2.4G",
+    "msg.noWifi": "未检测到 Wi‑Fi 网卡",
     "msg.countryChangeFailed": "更改国家码失败：{err}",
     "countryNames": {
       "CN": "中国",
@@ -221,6 +223,7 @@ const I18N = {
     "msg.saved": "Saved",
     "msg.savedRestart": "Saved and restarted",
     "msg.no5g": "5GHz channels unavailable; switched to 2.4GHz",
+    "msg.noWifi": "No Wi-Fi device detected",
     "msg.countryChangeFailed": "Failed to change country code: {err}",
     "countryNames": {
       "CN": "China",
@@ -943,19 +946,25 @@ function fillForm(cfg) {
   }
 }
 
-function setIfaceOptions(ifaces, selected) {
+function setIfaceOptions(ifaces, selected, autoResolved) {
   if (!ifaceEl || !ifaceEl.options) return;
 
   const list = Array.isArray(ifaces) ? ifaces.map(String) : [];
-  const uniq = Array.from(new Set(list.filter(Boolean)));
+  let uniq = Array.from(new Set(list.filter(Boolean)));
 
   const keep = (selected ?? "").toString();
+  const autoResolvedName = (autoResolved || '').toString().trim();
+  if (!keep && autoResolvedName) {
+    uniq = uniq.filter((d) => d !== autoResolvedName);
+  }
   const needsUnknown = keep && !uniq.includes(keep);
 
   ifaceEl.innerHTML = '';
   const autoOpt = document.createElement('option');
   autoOpt.value = '';
-  autoOpt.textContent = t('opt.ifaceAuto');
+  autoOpt.textContent = keep
+    ? t('opt.ifaceAuto')
+    : (autoResolvedName || t('opt.ifaceAuto'));
   ifaceEl.appendChild(autoOpt);
 
   for (const d of uniq) {
@@ -975,19 +984,25 @@ function setIfaceOptions(ifaces, selected) {
   ifaceEl.value = keep;
 }
 
-function setUplinkOptions(uplinks, selected) {
+function setUplinkOptions(uplinks, selected, autoResolved) {
   if (!uplinkEl || !uplinkEl.options) return;
 
   const list = Array.isArray(uplinks) ? uplinks.map(String) : [];
-  const uniq = Array.from(new Set(list.filter(Boolean)));
+  let uniq = Array.from(new Set(list.filter(Boolean)));
 
   const keep = (selected ?? "").toString();
+  const autoResolvedName = (autoResolved || '').toString().trim();
+  if (!keep && autoResolvedName) {
+    uniq = uniq.filter((d) => d !== autoResolvedName);
+  }
   const needsUnknown = keep && !uniq.includes(keep);
 
   uplinkEl.innerHTML = '';
   const autoOpt = document.createElement('option');
   autoOpt.value = '';
-  autoOpt.textContent = t('opt.uplinkAuto');
+  autoOpt.textContent = keep
+    ? t('opt.uplinkAuto')
+    : (autoResolvedName || t('opt.uplinkAuto'));
   uplinkEl.appendChild(autoOpt);
 
   for (const d of uniq) {
@@ -1007,6 +1022,18 @@ function setUplinkOptions(uplinks, selected) {
   uplinkEl.value = keep;
 }
 
+function notifyIfNoWifiIfaces(ifaces) {
+  const list = Array.isArray(ifaces) ? ifaces.filter(Boolean) : [];
+  const hasWifi = list.length > 0;
+  if (hasWifi) {
+    noWifiNoticeShown = false;
+    return;
+  }
+  if (noWifiNoticeShown) return;
+  noWifiNoticeShown = true;
+  internalAlert(t("msg.noWifi")).catch(() => { /* ignore */ });
+}
+
 async function refresh({ force = false, withConfig = true } = {}) {
   const baseline = readForm();
 
@@ -1022,8 +1049,13 @@ async function refresh({ force = false, withConfig = true } = {}) {
     const cfgObj = cfg && cfg.config;
     applyChannelOptions(cfg && cfg.channelOptions);
     const current = (!force && formDirty) ? baseline : null;
-    setIfaceOptions(ifs && ifs.ifaces, current ? current.iface : (cfgObj && cfgObj.iface));
-    setUplinkOptions(ups && ups.uplinks, current ? current.uplinkIface : (cfgObj && cfgObj.uplinkIface));
+    notifyIfNoWifiIfaces(ifs && ifs.ifaces);
+    const selectedIface = current ? current.iface : (cfgObj && cfgObj.iface);
+    const selectedUplink = current ? current.uplinkIface : (cfgObj && cfgObj.uplinkIface);
+    const autoIface = st && st.status ? st.status.iface : "";
+    const autoUplink = st && st.status ? (st.status.effectiveUplinkIface || st.status.uplinkIface || "") : "";
+    setIfaceOptions(ifs && ifs.ifaces, selectedIface, autoIface);
+    setUplinkOptions(ups && ups.uplinks, selectedUplink, autoUplink);
 
     if (cfgObj && (force || !formDirty)) {
       fillForm(cfgObj);
@@ -1049,8 +1081,11 @@ async function refresh({ force = false, withConfig = true } = {}) {
   ]);
 
   // No config fetch: keep current form values while refreshing option lists.
-  setIfaceOptions(ifs && ifs.ifaces, baseline.iface);
-  setUplinkOptions(ups && ups.uplinks, baseline.uplinkIface);
+  notifyIfNoWifiIfaces(ifs && ifs.ifaces);
+  const autoIface = st && st.status ? st.status.iface : "";
+  const autoUplink = st && st.status ? (st.status.effectiveUplinkIface || st.status.uplinkIface || "") : "";
+  setIfaceOptions(ifs && ifs.ifaces, baseline.iface, autoIface);
+  setUplinkOptions(ups && ups.uplinks, baseline.uplinkIface, autoUplink);
   setRunningUI(
     st && st.status && st.status.running === true,
     st && st.status ? st.status.internetStatus : undefined

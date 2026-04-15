@@ -46,6 +46,16 @@ if [ "$hotspot_iface" = "$parent_iface" ] && [ "$sta_ap_concurrent" != "true" ] 
 fi
 
 ip="$(ip -4 addr show dev "$hotspot_iface" 2>/dev/null | awk '/inet[[:space:]]/{print $2; exit}' || true)"
+txpower_dbm="$(wifi_txpower_dbm "$hotspot_iface" 2>/dev/null || true)"
+wifi_driver="$(wifi_driver_name "$hotspot_iface" 2>/dev/null || true)"
+low_txpower="false"
+if wifi_txpower_is_suspiciously_low "$hotspot_iface"; then
+  low_txpower="true"
+fi
+effective_uplink_iface="${NAT_UPLINK_IFACE:-${UPLINK_IFACE:-}}"
+if [ -z "${effective_uplink_iface:-}" ]; then
+  effective_uplink_iface="$(detect_route_dev 1.1.1.1 || true)"
+fi
 
 # Check internet connectivity via uplink iface (best-effort)
 internet_status="false"
@@ -74,7 +84,11 @@ json_kv_string "parentActiveConnection" "${parent_active_connection:-}"
 json_kv_bool "staApConcurrent" "$sta_ap_concurrent"
 json_kv_bool "willDisconnectSta" "$will_disconnect_sta"
 json_kv_string "ip" "${ip:-}"
+json_kv_string "txPowerDbm" "${txpower_dbm:-}"
+json_kv_string "wifiDriver" "${wifi_driver:-}"
+json_kv_bool "lowTxPower" "$low_txpower"
 json_kv_string "uplinkIface" "${UPLINK_IFACE:-}"
+json_kv_string "effectiveUplinkIface" "${effective_uplink_iface:-}"
 json_kv_raw "internetStatus" "$internet_status"
 json_kv_string "internetReason" "${internet_reason:-}"
 json_end

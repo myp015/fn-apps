@@ -1006,6 +1006,51 @@ iface_is_wifi() {
   '
 }
 
+wifi_driver_name() {
+  dev="${1:-${IFACE:-}}"
+  [ -n "${dev:-}" ] || return 0
+  if command -v ethtool >/dev/null 2>&1; then
+    ethtool -i "$dev" 2>/dev/null | awk -F': *' '$1=="driver"{print $2; exit}' || true
+  fi
+}
+
+wifi_txpower_dbm() {
+  dev="${1:-${IFACE:-}}"
+  [ -n "${dev:-}" ] || return 0
+  command -v iw >/dev/null 2>&1 || return 0
+  iw dev "$dev" info 2>/dev/null | awk '
+    /txpower[[:space:]]+[0-9.]+[[:space:]]+dBm/ {
+      for (i = 1; i <= NF; i++) {
+        if ($i == "txpower") {
+          print $(i + 1)
+          exit
+        }
+      }
+    }' || true
+}
+
+wifi_txpower_is_suspiciously_low() {
+  dev="${1:-${IFACE:-}}"
+  txp="$(wifi_txpower_dbm "$dev")"
+  [ -n "${txp:-}" ] || return 1
+  awk -v v="$txp" 'BEGIN{ exit (v <= 3.5) ? 0 : 1 }'
+}
+
+wifi_low_power_notice() {
+  dev="${1:-${IFACE:-}}"
+  driver="$(wifi_driver_name "$dev")"
+  txp="$(wifi_txpower_dbm "$dev")"
+  [ -n "${driver:-}" ] || driver="unknown"
+  [ -n "${txp:-}" ] || txp="unknown"
+
+  if [ "${driver:-}" = "mt7921e" ] && wifi_txpower_is_suspiciously_low "$dev"; then
+    printf '%s' "Warning: driver '$driver' is reporting very low transmit power (${txp} dBm). Hotspot is running, but discovery/range may still be poor. Try 2.4GHz/20MHz first; if coverage is still weak, this points to an mt7921e driver/firmware power issue rather than hotspot setup."
+    return 0
+  fi
+
+  return 1
+}
+
 ensure_iface() {
   # If IFACE is empty, try auto-pick a Wi-Fi device.
   if [ -z "${IFACE:-}" ]; then

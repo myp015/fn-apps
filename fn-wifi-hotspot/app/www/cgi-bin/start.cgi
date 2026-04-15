@@ -78,12 +78,13 @@ fi
 
 out=""
 nmcli_wait="${NMCLI_WAIT_SECS:-20}"
-# Create and activate the hotspot.
-# Always delete and recreate (avoid stale/partial profiles).
+# Create the hotspot profile with the final settings first, then activate once.
+# This avoids the previous start flow where NetworkManager brought up a default
+# hotspot first and we immediately bounced it again to apply the desired IP.
 nmcli con down id "$SSID" >/dev/null 2>&1 || true
 nmcli con delete "$SSID" >/dev/null 2>&1 || true
 nmcli device disconnect "$hotspot_iface" >/dev/null 2>&1 || true
-if ! out="$(nmcli --wait "$nmcli_wait" dev wifi hotspot ifname "$hotspot_iface" con-name "$SSID" ssid "$SSID" password "$PASSWORD" band "$BAND" channel "$CHANNEL" 2>&1)"; then
+if ! out="$(nmcli con add type wifi ifname "$hotspot_iface" con-name "$SSID" autoconnect no ssid "$SSID" 2>&1)"; then
   rc=$?
   nmcli con down id "$SSID" >/dev/null 2>&1 || true
   nmcli con delete "$SSID" >/dev/null 2>&1 || true
@@ -92,15 +93,54 @@ if ! out="$(nmcli --wait "$nmcli_wait" dev wifi hotspot ifname "$hotspot_iface" 
     nmcli con up id "$sta_prev_con" >/dev/null 2>&1 || true
   fi
   out="$(sanitize_text "${out:-}" || true)"
-  if [ "$rc" -eq 8 ] 2>/dev/null; then
-    http_err "504 Gateway Timeout" "Hotspot setup timed out after ${nmcli_wait}s.
-$out"
-  fi
   http_err "500 Internal Server Error" "$out"
 fi
 
-# Try to apply requested channel width (best-effort). NetworkManager keys vary by version/driver;
-# we attempt common settings and ignore failures so hotspot creation can still proceed.
+if [ -n "${IP_CIDR:-}" ]; then
+  nmcli_mod_cmd() {
+    nmcli con mod "$SSID" \
+      802-11-wireless.mode ap \
+      802-11-wireless.band "$BAND" \
+      802-11-wireless.channel "$CHANNEL" \
+      802-11-wireless.powersave 2 \
+      802-11-wireless-security.key-mgmt wpa-psk \
+      802-11-wireless-security.psk "$PASSWORD" \
+      802-11-wireless-security.proto rsn \
+      802-11-wireless-security.pairwise ccmp \
+      ipv4.method shared \
+      ipv4.addresses "$IP_CIDR"
+  }
+else
+  nmcli_mod_cmd() {
+    nmcli con mod "$SSID" \
+      802-11-wireless.mode ap \
+      802-11-wireless.band "$BAND" \
+      802-11-wireless.channel "$CHANNEL" \
+      802-11-wireless.powersave 2 \
+      802-11-wireless-security.key-mgmt wpa-psk \
+      802-11-wireless-security.psk "$PASSWORD" \
+      802-11-wireless-security.proto rsn \
+      802-11-wireless-security.pairwise ccmp \
+      ipv4.method shared
+  }
+fi
+
+if ! nmcli_mod_cmd 2>/tmp/fn-hotspot-nmcli-mod.err; then
+  nmcli_err="$(sanitize_text "$(cat /tmp/fn-hotspot-nmcli-mod.err 2>/dev/null || true)")"
+  rm -f /tmp/fn-hotspot-nmcli-mod.err >/dev/null 2>&1 || true
+  nmcli con down id "$SSID" >/dev/null 2>&1 || true
+  nmcli con delete "$SSID" >/dev/null 2>&1 || true
+  nmcli device disconnect "$hotspot_iface" >/dev/null 2>&1 || true
+  if [ -n "${sta_prev_con:-}" ]; then
+    nmcli con up id "$sta_prev_con" >/dev/null 2>&1 || true
+  fi
+  http_err "500 Internal Server Error" "${nmcli_err:-nmcli: failed to configure hotspot connection '$SSID'}"
+fi
+rm -f /tmp/fn-hotspot-nmcli-mod.err >/dev/null 2>&1 || true
+
+# Try to apply requested channel width (best-effort). NetworkManager keys vary by
+# version/driver; attempt common settings before the first activation so we do
+# not need to bounce an already-running hotspot.
 if [ -n "${CHANNEL_WIDTH:-}" ]; then
   case "${CHANNEL_WIDTH}" in
     20)
@@ -125,40 +165,22 @@ if [ -n "${CHANNEL_WIDTH:-}" ]; then
       ;;
   esac
 fi
-# Apply optional IP/CIDR for shared network.
-desired_ip_cidr=""
-if [ -n "${IP_CIDR:-}" ]; then
-  if ! nmcli con mod "$SSID" ipv4.method shared ipv4.addresses "$IP_CIDR" >/dev/null 2>&1; then
-    http_err "500 Internal Server Error" "nmcli: failed to apply hotspot IPv4 address '$IP_CIDR'"
-  fi
-  desired_ip_cidr="$IP_CIDR"
-fi
-
-dev_state="$(nmcli -g GENERAL.STATE dev show "$hotspot_iface" 2>/dev/null | head -n1 || true)"
-current_ip_cidr="$(ip -4 addr show dev "$hotspot_iface" 2>/dev/null | awk '/inet[[:space:]]/{print $2; exit}' || true)"
-needs_reactivate="false"
-
-case "${dev_state:-}" in
-  100* | *activated*)
-    :
-    ;;
-  *)
-    needs_reactivate="true"
-    ;;
-esac
-
-if [ -n "${desired_ip_cidr:-}" ] && [ "${current_ip_cidr:-}" != "${desired_ip_cidr:-}" ]; then
-  needs_reactivate="true"
-fi
-
-if [ "$needs_reactivate" = "true" ]; then
+# Activate once after all desired settings are in place.
+if ! nmcli_out="$(nmcli --wait "$nmcli_wait" con up id "$SSID" 2>&1)"; then
+  rc=$?
+  nmcli_err="$(sanitize_text "${nmcli_out:-}" || true)"
   nmcli con down id "$SSID" >/dev/null 2>&1 || true
+  nmcli con delete "$SSID" >/dev/null 2>&1 || true
   nmcli device disconnect "$hotspot_iface" >/dev/null 2>&1 || true
-  if ! nmcli_out="$(nmcli --wait 15 con up id "$SSID" 2>&1)"; then
-    nmcli_err="$(sanitize_text "${nmcli_out:-}" || true)"
-    http_err "500 Internal Server Error" "nmcli: failed to bring up hotspot connection '$SSID'
+  if [ -n "${sta_prev_con:-}" ]; then
+    nmcli con up id "$sta_prev_con" >/dev/null 2>&1 || true
+  fi
+  if [ "$rc" -eq 8 ] 2>/dev/null; then
+    http_err "504 Gateway Timeout" "Hotspot setup timed out after ${nmcli_wait}s.
 $nmcli_err"
   fi
+  http_err "500 Internal Server Error" "nmcli: failed to bring up hotspot connection '$SSID'
+$nmcli_err"
 fi
 
 # Best-effort: ensure hotspot clients can reach internet.
@@ -171,4 +193,6 @@ apply_allow_ports "$hotspot_iface" "${ALLOW_PORTS:-}"
 # Persist enabled state so we can restore after reboot.
 write_hotspot_state 1
 
-http_ok_output "$out"
+notice=""
+notice="$(wifi_low_power_notice "$hotspot_iface" 2>/dev/null || true)"
+http_ok_output "$out" "${notice:-}"

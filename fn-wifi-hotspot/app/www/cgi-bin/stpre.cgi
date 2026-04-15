@@ -93,6 +93,14 @@ if ! validate_runtime_channel; then
   warnings_Num=$((warnings_Num + 1))
 fi
 
+# Driver-level low-TX-power warning (best-effort)
+STEP="txpower-check"
+if warnmsg="$(wifi_low_power_notice "${IFACE:-}" 2>/dev/null || true)" && [ -n "${warnmsg:-}" ]; then
+  warnmsg="$(localize_msg "$warnmsg")"
+  warnings_list="${warnings_list}${warnmsg}\n"
+  warnings_Num=$((warnings_Num + 1))
+fi
+
 # Build JSON success response
 body=""
 if [ "$warnings_Num" -gt 0 ]; then
