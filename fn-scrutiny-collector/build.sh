@@ -25,7 +25,8 @@ get_latest_version() {
   echo "$tag"
 }
 
-SCRUTINY_VERSION="${1:-$(get_latest_version)}"
+#SCRUTINY_VERSION="${1:-$(get_latest_version)}"
+SCRUTINY_VERSION="1.49.2"
 echo "Building Scrutiny Collector v${SCRUTINY_VERSION} ..."
 
 ARCHS=(x86_64 aarch64)
