@@ -1,5 +1,5 @@
 appname               = fn-scrutiny-collector
-version               = 1.34.0
+version               = 1.49.2
 display_name          = Scrutiny Collector
 desc                  = 硬盘 S.M.A.R.T 健康监控采集器，定时采集硬盘健康数据发送到 Scrutiny Web 服务
 platform              = all
