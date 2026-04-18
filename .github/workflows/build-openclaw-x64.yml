@@ -1,0 +1,67 @@
+name: Build OpenClaw (x64)
+
+on:
+  workflow_dispatch:
+    inputs:
+      release:
+        description: 'Create GitHub Release'
+        required: false
+        default: true
+        type: boolean
+
+jobs:
+  build-openclaw-x64:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Init Env
+        run: |
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git config --global user.name "github-actions[bot]"
+          sudo timedatectl set-timezone "Asia/Shanghai"
+
+      - name: Build fn-openclaw package
+        run: |
+          set -e
+          APP_DIR="fn-openclaw"
+          [ -d "${APP_DIR}" ] || { echo "${APP_DIR} not found"; exit 1; }
+
+          APPNAME=$(grep -w '^appname' "${APP_DIR}/manifest" | awk -F= '{print $2}' | xargs)
+          VERSION=$(grep -w '^version' "${APP_DIR}/manifest" | awk -F= '{print $2}' | xargs)
+
+          chmod +x "${APP_DIR}/build.sh"
+          "${APP_DIR}/build.sh"
+
+          SRC_FILE="${APPNAME}_all_v${VERSION}.fpk"
+          DST_FILE="${APPNAME}_x64_v${VERSION}.fpk"
+
+          [ -f "${SRC_FILE}" ] || { echo "Build output not found: ${SRC_FILE}"; exit 1; }
+          cp -f "${SRC_FILE}" "${DST_FILE}"
+
+          echo "APPNAME=${APPNAME}" >> $GITHUB_ENV
+          echo "VERSION=${VERSION}" >> $GITHUB_ENV
+          echo "FILENAME=${DST_FILE}" >> $GITHUB_ENV
+          echo "TAG=$(date +"%Y.%m.%d-%H%M")" >> $GITHUB_ENV
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: fn-openclaw-x64
+          path: ${{ env.FILENAME }}
+          retention-days: 7
+
+      - name: Release
+        if: ${{ inputs.release == true }}
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.TAG }}
+          files: |
+            ${{ env.FILENAME }}
+          body: |
+            Build output for fn-openclaw x64
+            - App: ${{ env.APPNAME }}
+            - Version: ${{ env.VERSION }}
+            - File: ${{ env.FILENAME }}
