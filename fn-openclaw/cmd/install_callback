@@ -2,23 +2,19 @@
 
 set -e
 
-NODE_VERSION="v22.22.0"
-ARCH="$(uname -m)"
-case "${ARCH}" in
-  x86_64) NODE_ARCH="x64" ;;
-  aarch64) NODE_ARCH="arm64" ;;
-  *)
-    echo "Unsupported arch: ${ARCH}" >"${TRIM_TEMP_LOGFILE}"
-    exit 1
-    ;;
-esac
-
+ARCH=$(uname -m)
 SERVER_DIR="${TRIM_APPDEST}/server"
+ARCH_DIR="${SERVER_DIR}/${ARCH}"
 NODE_DIR="${SERVER_DIR}/node-runtime"
 BUNDLE_DIR="${SERVER_DIR}/openclaw-bundle"
 CFG_DIR="${TRIM_PKGVAR}/.openclaw"
 CFG_FILE="${CFG_DIR}/openclaw.json"
 WIZARD_ENV="${TRIM_PKGVAR}/wizard.env"
+
+if [ ! -d "${ARCH_DIR}" ]; then
+  echo "openclaw runtime for ${ARCH} not found" >"${TRIM_TEMP_LOGFILE}"
+  exit 1
+fi
 
 mkdir -p "${SERVER_DIR}" "${CFG_DIR}"
 
@@ -30,38 +26,14 @@ WIZARD_BASE_URL=${wizard_base_url:-http://127.0.0.1:8317/v1}
 WIZARD_API_KEY=${wizard_api_key:-sk-V5zPkG6MJrIpxgmDw}
 ENV
 
-# Download standalone node runtime.
-TMP_NODE="${TRIM_PKGVAR}/node-${NODE_VERSION}-linux-${NODE_ARCH}.tar.xz"
-curl -fL "https://nodejs.org/dist/${NODE_VERSION}/node-${NODE_VERSION}-linux-${NODE_ARCH}.tar.xz" -o "${TMP_NODE}" 2>"${TRIM_TEMP_LOGFILE}" || {
-  echo "download node runtime failed" >"${TRIM_TEMP_LOGFILE}"
+# Activate arch runtime bundle.
+rm -rf "${NODE_DIR}" "${BUNDLE_DIR}"
+cp -a "${ARCH_DIR}/node-runtime" "${NODE_DIR}" || {
+  echo "copy node runtime failed" >"${TRIM_TEMP_LOGFILE}"
   exit 1
 }
-rm -rf "${NODE_DIR}"
-mkdir -p "${NODE_DIR}"
-tar -xJf "${TMP_NODE}" -C "${NODE_DIR}" --strip-components=1 2>>"${TRIM_TEMP_LOGFILE}" || {
-  echo "extract node runtime failed" >"${TRIM_TEMP_LOGFILE}"
-  exit 1
-}
-rm -f "${TMP_NODE}"
-
-export PATH="${NODE_DIR}/bin:${PATH}"
-
-# Build OpenClaw runtime bundle.
-rm -rf "${BUNDLE_DIR}" "${TRIM_PKGVAR}/openclaw-"*.tgz
-mkdir -p "${BUNDLE_DIR}"
-(
-  cd "${TRIM_PKGVAR}"
-  npm pack openclaw@2026.4.15 --silent >/dev/null
-  tar -xzf openclaw-2026.4.15.tgz -C "${BUNDLE_DIR}" --strip-components=1
-  cd "${BUNDLE_DIR}"
-  npm install --omit=dev --legacy-peer-deps --no-audit --no-fund \
-    @larksuiteoapi/feishu-openclaw-plugin@2026.3.8 \
-    @soimy/dingtalk@3.5.3 \
-    @sunnoy/wecom@3.0.0 \
-    @tencent-connect/openclaw-qqbot@1.7.1 >/dev/null
-  node scripts/postinstall-bundled-plugins.mjs >/dev/null
-) >>"${TRIM_TEMP_LOGFILE}" 2>&1 || {
-  echo "openclaw bundle bootstrap failed" >"${TRIM_TEMP_LOGFILE}"
+cp -a "${ARCH_DIR}/openclaw-bundle" "${BUNDLE_DIR}" || {
+  echo "copy openclaw bundle failed" >"${TRIM_TEMP_LOGFILE}"
   exit 1
 }
 
