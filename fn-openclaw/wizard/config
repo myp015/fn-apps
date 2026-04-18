@@ -1,0 +1,11 @@
+[
+  {
+    "stepTitle": "OpenClaw 配置",
+    "items": [
+      { "type": "text", "field": "wizard_port", "label": "Gateway 端口" },
+      { "type": "text", "field": "wizard_token", "label": "Gateway Token" },
+      { "type": "text", "field": "wizard_base_url", "label": "模型 BASE_URL" },
+      { "type": "password", "field": "wizard_api_key", "label": "模型 API_KEY" }
+    ]
+  }
+]

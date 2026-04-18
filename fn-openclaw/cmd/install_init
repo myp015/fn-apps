@@ -1,0 +1,4 @@
+#!/bin/bash
+
+# pre-install checks
+exit 0

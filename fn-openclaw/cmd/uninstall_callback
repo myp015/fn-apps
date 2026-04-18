@@ -1,0 +1,5 @@
+#!/bin/bash
+
+# keep user data by default; remove runtime cache only
+rm -rf "${TRIM_APPDEST}/server/node-runtime" "${TRIM_APPDEST}/server/openclaw-bundle" 2>/dev/null || true
+exit 0

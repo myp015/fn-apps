@@ -264,5 +264,19 @@
     "download_url": "https://github.com/RROrg/fn-apps/releases/download/2026.04.16-1809/fn-zerotier_all_v1.0.2.fpk",
     "install_type": "系统空间",
     "changelog": "Initial release of fn-zerotier package."
+  },
+  "fn-openclaw": {
+    "display_name": "openclaw",
+    "platform": "all",
+    "version": "0.1.0",
+    "desc": "OpenClaw 网关与多渠道助手（fnOS 适配版）。",
+    "distributor": "ainas",
+    "distributor_url": "https://ainas.taobao.com",
+    "bug_report_url": "https://github.com/myp015/fn-apps/issues",
+    "labels": "工具",
+    "size": " 0.167",
+    "download_url": "https://github.com/myp015/fn-apps/releases/download/latest/fn-openclaw_all_v0.1.0.fpk",
+    "install_type": "存储空间",
+    "changelog": "Initial release of fn-openclaw package."
   }
 }

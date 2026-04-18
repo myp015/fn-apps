@@ -1,0 +1,103 @@
+#!/bin/bash
+
+set -e
+
+NODE_VERSION="v22.22.0"
+ARCH="$(uname -m)"
+case "${ARCH}" in
+  x86_64) NODE_ARCH="x64" ;;
+  aarch64) NODE_ARCH="arm64" ;;
+  *)
+    echo "Unsupported arch: ${ARCH}" >"${TRIM_TEMP_LOGFILE}"
+    exit 1
+    ;;
+esac
+
+SERVER_DIR="${TRIM_APPDEST}/server"
+NODE_DIR="${SERVER_DIR}/node-runtime"
+BUNDLE_DIR="${SERVER_DIR}/openclaw-bundle"
+CFG_DIR="${TRIM_PKGVAR}/.openclaw"
+CFG_FILE="${CFG_DIR}/openclaw.json"
+WIZARD_ENV="${TRIM_PKGVAR}/wizard.env"
+
+mkdir -p "${SERVER_DIR}" "${CFG_DIR}"
+
+# Save wizard values for runtime/config updates.
+cat >"${WIZARD_ENV}" <<ENV
+WIZARD_PORT=${wizard_port:-18789}
+WIZARD_TOKEN=${wizard_token:-123456}
+WIZARD_BASE_URL=${wizard_base_url:-http://127.0.0.1:8317/v1}
+WIZARD_API_KEY=${wizard_api_key:-sk-V5zPkG6MJrIpxgmDw}
+ENV
+
+# Download standalone node runtime.
+TMP_NODE="${TRIM_PKGVAR}/node-${NODE_VERSION}-linux-${NODE_ARCH}.tar.xz"
+curl -fL "https://nodejs.org/dist/${NODE_VERSION}/node-${NODE_VERSION}-linux-${NODE_ARCH}.tar.xz" -o "${TMP_NODE}" 2>"${TRIM_TEMP_LOGFILE}" || {
+  echo "download node runtime failed" >"${TRIM_TEMP_LOGFILE}"
+  exit 1
+}
+rm -rf "${NODE_DIR}"
+mkdir -p "${NODE_DIR}"
+tar -xJf "${TMP_NODE}" -C "${NODE_DIR}" --strip-components=1 2>>"${TRIM_TEMP_LOGFILE}" || {
+  echo "extract node runtime failed" >"${TRIM_TEMP_LOGFILE}"
+  exit 1
+}
+rm -f "${TMP_NODE}"
+
+export PATH="${NODE_DIR}/bin:${PATH}"
+
+# Build OpenClaw runtime bundle.
+rm -rf "${BUNDLE_DIR}" "${TRIM_PKGVAR}/openclaw-"*.tgz
+mkdir -p "${BUNDLE_DIR}"
+(
+  cd "${TRIM_PKGVAR}"
+  npm pack openclaw@2026.4.15 --silent >/dev/null
+  tar -xzf openclaw-2026.4.15.tgz -C "${BUNDLE_DIR}" --strip-components=1
+  cd "${BUNDLE_DIR}"
+  npm install --omit=dev --legacy-peer-deps --no-audit --no-fund \
+    @larksuiteoapi/feishu-openclaw-plugin@2026.3.8 \
+    @soimy/dingtalk@3.5.3 \
+    @sunnoy/wecom@3.0.0 \
+    @tencent-connect/openclaw-qqbot@1.7.1 >/dev/null
+  node scripts/postinstall-bundled-plugins.mjs >/dev/null
+) >>"${TRIM_TEMP_LOGFILE}" 2>&1 || {
+  echo "openclaw bundle bootstrap failed" >"${TRIM_TEMP_LOGFILE}"
+  exit 1
+}
+
+# Initialize config if missing.
+if [ ! -f "${CFG_FILE}" ]; then
+  cp -f "${TRIM_APPDEST}/server/config/openclaw.template.json" "${CFG_FILE}" 2>>"${TRIM_TEMP_LOGFILE}" || {
+    echo "initialize openclaw config failed" >"${TRIM_TEMP_LOGFILE}"
+    exit 1
+  }
+fi
+
+# Apply wizard values into config.
+"${NODE_DIR}/bin/node" -e '
+const fs = require("fs");
+const cfgPath = process.argv[1];
+const envPath = process.argv[2];
+const cfg = JSON.parse(fs.readFileSync(cfgPath, "utf8"));
+const env = Object.fromEntries(fs.readFileSync(envPath, "utf8").split(/\n+/).filter(Boolean).map(l=>l.split("=")).filter(a=>a.length>=2).map(([k,...v])=>[k,v.join("=")]));
+const port = Number(env.WIZARD_PORT || 18789);
+const token = env.WIZARD_TOKEN || "123456";
+const baseUrl = env.WIZARD_BASE_URL || "http://127.0.0.1:8317/v1";
+const apiKey = env.WIZARD_API_KEY || "sk-V5zPkG6MJrIpxgmDw";
+cfg.gateway = cfg.gateway || {};
+cfg.gateway.port = Number.isFinite(port) ? port : 18789;
+cfg.gateway.auth = cfg.gateway.auth || {};
+cfg.gateway.auth.mode = "token";
+cfg.gateway.auth.token = token;
+cfg.models = cfg.models || {};
+cfg.models.providers = cfg.models.providers || {};
+cfg.models.providers.default = cfg.models.providers.default || {};
+cfg.models.providers.default.baseUrl = baseUrl;
+cfg.models.providers.default.apiKey = apiKey;
+fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2) + "\n", "utf8");
+' "${CFG_FILE}" "${WIZARD_ENV}" >>"${TRIM_TEMP_LOGFILE}" 2>&1 || {
+  echo "apply wizard config failed" >"${TRIM_TEMP_LOGFILE}"
+  exit 1
+}
+
+exit 0

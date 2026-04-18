@@ -1,0 +1,11 @@
+[
+  {
+    "stepTitle": "卸载 OpenClaw",
+    "items": [
+      {
+        "type": "tips",
+        "helpText": "卸载不会自动删除数据目录，请手动清理 TRIM_DATA_PATH/.openclaw。"
+      }
+    ]
+  }
+]

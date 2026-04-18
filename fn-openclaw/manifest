@@ -1,0 +1,13 @@
+appname               = fn-openclaw
+version               = 0.1.0
+display_name          = openclaw
+desc                  = OpenClaw 网关与多渠道助手（fnOS 适配版）。
+platform              = all
+source                = thirdparty
+desktop_uidir         = ui
+desktop_applaunchname = fn-openclaw.Application
+maintainer            = ainas
+maintainer_url        = https://ainas.taobao.com
+distributor           = ainas
+distributor_url       = https://ainas.taobao.com
+reloadui              = yes
