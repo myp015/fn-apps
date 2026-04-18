@@ -2,12 +2,6 @@ name: Build OpenClaw (x64)
 
 on:
   workflow_dispatch:
-    inputs:
-      release:
-        description: 'Create GitHub Release'
-        required: false
-        default: true
-        type: boolean
 
 jobs:
   build-openclaw-x64:
@@ -44,7 +38,6 @@ jobs:
           echo "APPNAME=${APPNAME}" >> $GITHUB_ENV
           echo "VERSION=${VERSION}" >> $GITHUB_ENV
           echo "FILENAME=${DST_FILE}" >> $GITHUB_ENV
-          echo "TAG=$(date +"%Y.%m.%d-%H%M")" >> $GITHUB_ENV
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
@@ -53,15 +46,3 @@ jobs:
           path: ${{ env.FILENAME }}
           retention-days: 7
 
-      - name: Release
-        if: ${{ inputs.release == true }}
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ env.TAG }}
-          files: |
-            ${{ env.FILENAME }}
-          body: |
-            Build output for fn-openclaw x64
-            - App: ${{ env.APPNAME }}
-            - Version: ${{ env.VERSION }}
-            - File: ${{ env.FILENAME }}
